@@ -353,11 +353,40 @@ function allMemos() {
 const uid = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 
 /**
+ * 剥掉推理模型的思维链。
+ * DeepSeek V4 / R1 这类模型会把 reasoning 一起返回，
+ * 不剥的话存进记忆的就是「嗯，我先想想……」。
+ */
+function stripThinking(raw) {
+    let t = String(raw || '');
+    if (!t) return '';
+
+    // 有结束标记：取最后一次结束标记之后的内容
+    const endRe = /(?:\|end_of_thinking\|>?|｜end[▁_ ]?of[▁_ ]?thinking｜>?|<\/think(?:ing)?>|<\/reasoning>)/gi;
+    let lastEnd = -1;
+    let m;
+    while ((m = endRe.exec(t)) !== null) {
+        lastEnd = Math.max(lastEnd, m.index + m[0].length);
+    }
+    if (lastEnd >= 0) {
+        t = t.slice(lastEnd);
+    } else if (/begin[▁_ ]?of[▁_ ]?thinking|<think/i.test(t)) {
+        // 只有开始标记，说明整段都是思考，没给正文
+        return '';
+    }
+
+    // 剩下的零散标签
+    t = t.replace(/<think[^>]*>/gi, '').replace(/<\/think[^>]*>/gi, '');
+    t = t.replace(/<\/?reasoning[^>]*>/gi, '');
+    return t.trim();
+}
+
+/**
  * 清掉模型爱加的包装：代码块、引号、开场白、markdown 标题。
  * 之前每行都收进记忆，就是因为没做这一步。
  */
 function cleanSummary(raw, maxLen = 400) {
-    let t = String(raw || '').trim();
+    let t = stripThinking(raw);
 
     t = t.replace(/^```[a-zA-Z]*\s*/i, '').replace(/```\s*$/, '');
     t = t.replace(/^["'“”「『]+/, '').replace(/["'“”」』]+$/, '');
@@ -553,7 +582,8 @@ async function aiCall(prompt, responseLength = 500, quietName = 'memory') {
     if (typeof ctx.generateRaw === 'function') {
         try {
             const out = await ctx.generateRaw({ prompt, responseLength, trimNames: false });
-            if (out && String(out).trim()) return String(out);
+            const clean = stripThinking(out);
+            if (clean) return clean;
         } catch (e) {
             console.warn('[织忆] generateRaw 不可用，尝试下一通道', e);
         }
@@ -564,13 +594,15 @@ async function aiCall(prompt, responseLength = 500, quietName = 'memory') {
             const out = await ctx.generateQuietPrompt({
                 quietPrompt: prompt, responseLength, quietName,
             });
-            if (out && String(out).trim()) return String(out);
+            const clean = stripThinking(out);
+            if (clean) return clean;
         } catch (e) {
             console.warn('[织忆] generateQuietPrompt(对象) 不可用，尝试旧签名', e);
         }
         try {
             const out = await ctx.generateQuietPrompt(prompt, false, true, quietName, responseLength);
-            if (out && String(out).trim()) return String(out);
+            const clean = stripThinking(out);
+            if (clean) return clean;
         } catch (e) {
             console.warn('[织忆] generateQuietPrompt(位置参数) 不可用', e);
         }
@@ -1678,9 +1710,9 @@ function updateStats() {
         const n = el(`[data-mw="stat-${k}"]`);
         if (n) n.textContent = v;
     };
-    set('total', node.beats.length + node.arcs.length + node.memos.length);
-    set('floor', node.beatMark);
-    set('pending', pendingRounds());
+    set('total', Number(node.beats.length + node.arcs.length + node.memos.length) || 0);
+    set('floor', Number(node.beatMark) || 0);
+    set('pending', Number(pendingRounds()) || 0);
 }
 
 function refreshAll() {
