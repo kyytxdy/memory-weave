@@ -1,59 +1,24 @@
 {
   "name": "人物档案",
-  "version": 1,
+  "version": 2,
   "entity": true,
   "keyField": "name",
   "autofill": true,
-  "description": "实体型模板：一个人物一张卡，按 keyField（姓名）分卡，同名自动合并。每轮从上一轮对话里找人，判定重要度后建档；超过设定轮数没出现会自动移除。字段只收对话里能直接观察到的信息——身份、外貌、说话方式可以观察，动机和隐藏立场不能。",
+  "description": "一个人物一张卡，按 keyField（姓名）分卡，同名自动合并。scope 标记字段归属：self 只在主角卡出现，npc 只在其他人物卡出现，不写是通用字段。主角是 ctx.name1（你的人设名）。",
   "fields": [
-    {
-      "id": "name",
-      "label": "姓名",
-      "type": "text",
-      "group": "main",
-      "required": true
-    },
-    {
-      "id": "role",
-      "label": "身份",
-      "type": "text",
-      "group": "main",
-      "placeholder": "药房主人 / 护卫 / 学徒"
-    },
-    {
-      "id": "relation",
-      "label": "与我的关系",
-      "type": "text",
-      "group": "main",
-      "placeholder": "收留我的人 / 债主 / 宿敌"
-    },
-    {
-      "id": "attitude",
-      "label": "对我的态度",
-      "type": "text",
-      "group": "main",
-      "placeholder": "戒备 / 温和 / 试探"
-    },
-    {
-      "id": "look",
-      "label": "外貌特征",
-      "type": "text",
-      "group": "extra",
-      "placeholder": "一眼能认出的特征"
-    },
-    {
-      "id": "speech",
-      "label": "说话方式",
-      "type": "text",
-      "group": "extra",
-      "placeholder": "口癖、语气"
-    },
-    {
-      "id": "lastEvent",
-      "label": "最近互动",
-      "type": "textarea",
-      "group": "extra",
-      "placeholder": "这一轮和他发生了什么"
-    }
+    { "id": "name", "label": "姓名", "type": "text", "group": "main", "required": true },
+    { "id": "role", "label": "身份", "type": "text", "group": "main", "placeholder": "药房主人 / 护卫 / 学徒" },
+    { "id": "age", "label": "年龄", "type": "text", "group": "main", "placeholder": "二十出头 / 三十七" },
+    { "id": "relation", "label": "关系", "type": "text", "group": "main", "scope": "npc", "placeholder": "收留我的人 / 债主 / 宿敌" },
+    { "id": "attitude", "label": "对我的态度", "type": "text", "group": "main", "scope": "npc", "placeholder": "戒备 / 温和 / 试探" },
+    { "id": "goal", "label": "当前打算", "type": "text", "group": "main", "scope": "self", "placeholder": "接下来想做什么" },
+    { "id": "state", "label": "我的处境", "type": "text", "group": "main", "scope": "self", "placeholder": "伤势、体力、被谁盯着" },
+    { "id": "recent", "label": "最近动态", "type": "textarea", "group": "main", "placeholder": "这一轮发生了什么" },
+    { "id": "place", "label": "所在地", "type": "text", "group": "extra", "placeholder": "当前所在或常驻地" },
+    { "id": "birthday", "label": "生日", "type": "text", "group": "extra", "placeholder": "具体日子，或某个季节" },
+    { "id": "look", "label": "外貌", "type": "text", "group": "extra", "placeholder": "一眼能认出的特征" },
+    { "id": "speech", "label": "说话方式", "type": "text", "group": "extra", "placeholder": "口癖、语气" },
+    { "id": "carry", "label": "随身之物", "type": "text", "group": "extra", "scope": "self", "placeholder": "身上带着的东西" },
+    { "id": "note", "label": "备注", "type": "text", "group": "extra", "placeholder": "其它值得留意的" }
   ]
 }

@@ -102,34 +102,41 @@
 
   const entities = {
     person: {
-      '艾拉': {
-        kind: 'entity', id: 'e1', templateId: 'person', key: '艾拉', importance: 5,
-        values: {
-          name: '艾拉', role: '药房主人', relation: '收留我的人',
-          attitude: '表面冷淡，实际处处照应',
-          look: '左手腕一道旧疤，常年系着灰布',
-          speech: '话少，习惯用反问',
-          lastEvent: '端着温水上楼，提起周老板问过林染的来历',
-        },
-        ts: now - 2 * DAY, updatedTs: now - 12 * MIN, lastRound: 12, source: 'auto',
-      },
       '林染': {
         kind: 'entity', id: 'e2', templateId: 'person', key: '林染', importance: 5,
         values: {
-          name: '林染', role: '借住药房的人', relation: '我自己',
-          attitude: '戒备，但已经开始松口',
+          name: '林染', role: '借住药房的客人', age: '二十出头',
+          goal: '给捡来的男孩落个名字，顺便弄清那半张地图',
+          state: '手背旧伤还没好，身上没几个钱，被周老板盯着',
+          recent: '在纸上给男孩取名，划掉一堆，最后定下「林参」',
+          place: '城南药房二楼',
+          birthday: '不清楚，大概在夏天',
           look: '手背有旧伤，袖口常沾墨',
-          speech: '说话前会先停一下',
-          lastEvent: '在纸上给男孩取名，最后定下「林参」',
+          speech: '开口前会先停一下',
+          carry: '半张烧焦的地图、三枚铜钱',
+        },
+        ts: now - 2 * DAY, updatedTs: now - 12 * MIN, lastRound: 12, source: 'auto',
+      },
+      '艾拉': {
+        kind: 'entity', id: 'e1', templateId: 'person', key: '艾拉', importance: 5,
+        values: {
+          name: '艾拉', role: '药房主人', age: '二十七八',
+          relation: '收留我的人', attitude: '表面冷淡，实际处处照应',
+          recent: '端着温水上楼，提起周老板问过林染的来历',
+          place: '城南药房',
+          birthday: '冬至前后',
+          look: '左手腕一道旧疤，常年系着灰布',
+          speech: '话少，习惯用反问',
         },
         ts: now - 2 * DAY, updatedTs: now - 12 * MIN, lastRound: 12, source: 'auto',
       },
       '周老板': {
         kind: 'entity', id: 'e3', templateId: 'person', key: '周老板', importance: 3,
         values: {
-          name: '周老板', role: '旧书店老板', relation: '认识艾拉，欠她一个人情',
-          attitude: '对林染的来历好奇',
-          lastEvent: '向艾拉打听林染是什么来路',
+          name: '周老板', role: '旧书店老板', age: '五十上下',
+          relation: '认识艾拉，欠她一个人情', attitude: '对林染的来路好奇',
+          recent: '向艾拉打听林染是什么来路',
+          place: '街角旧书店',
         },
         ts: now - 5 * DAY, updatedTs: now - 1.4 * HOUR, lastRound: 10, source: 'auto',
       },

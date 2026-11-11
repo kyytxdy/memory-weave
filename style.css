@@ -1592,6 +1592,30 @@ body.mw-locked {
     border-color: rgba(255, 107, 129, 0.2);
 }
 
+/* 主角卡：金边，一眼区分 */
+.mw-person.is-self {
+    background: rgba(255, 204, 122, 0.06);
+    border-color: rgba(255, 204, 122, 0.24);
+}
+
+.mw-person.is-self.open {
+    border-color: rgba(255, 204, 122, 0.42);
+}
+
+.mw-self-tag {
+    display: inline-block;
+    margin-left: 6px;
+    font-style: normal;
+    font-size: 9px;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: 5px;
+    color: #ffd99b;
+    background: rgba(255, 204, 122, 0.16);
+    border: 1px solid rgba(255, 204, 122, 0.3);
+    vertical-align: 1px;
+}
+
 /* =========================================================
  * 模板编辑器
  * ========================================================= */

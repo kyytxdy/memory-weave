@@ -59,28 +59,10 @@ const TONE_HINT = {
  * 想改字段？复制 templates/ 下的 JSON 改完再导入
  * ========================================================= */
 
-const GENERAL_TEMPLATE = {
-    id: 'general',
-    name: '事件档案',
-    builtin: true,
-    singleton: false,
-    fields: [
-        { id: 'title', label: '标题', type: 'text', group: 'main', required: true, placeholder: '一句话概括，如「初遇时的那场雨」' },
-        { id: 'category', label: '分类', type: 'select', group: 'main', options: ['事件', '人物', '地点', '物品', '规则', '关系', '承诺', '其他'] },
-        { id: 'subject', label: '涉及对象', type: 'text', group: 'main', placeholder: '这件事和谁有关' },
-        { id: 'detail', label: '经过 / 内容', type: 'textarea', group: 'main', placeholder: '发生了什么，说清了什么' },
-        { id: 'when', label: '时间', type: 'text', group: 'extra', placeholder: '故事内的第几天 / 季节' },
-        { id: 'place', label: '地点', type: 'text', group: 'extra', placeholder: '在哪里发生的' },
-        { id: 'quote', label: '关键台词', type: 'textarea', group: 'extra', placeholder: '值得原样记住的一句话' },
-        { id: 'change', label: '影响 / 变化', type: 'textarea', group: 'extra', placeholder: '关系、立场、心境上的变化' },
-        { id: 'tags', label: '标签', type: 'tags', group: 'extra', placeholder: '输入后按回车' },
-    ],
-};
-
 /*
- * 实体型模板：一个人物一张卡。
- * entity = true 表示按 keyField 的值分卡，同名的合并覆盖。
- * autofill = 每轮从上一轮对话里找人、填字段、更新最后出现轮次。
+ * 人物档案：一个人一张卡。
+ * scope 标记字段归属 —— self 只在主角卡出现，npc 只在其他人物卡出现，
+ * 不写 scope 的是通用字段。自己看自己，和看别人，关心的东西本来就不同。
  */
 const PERSON_TEMPLATE = {
     id: 'person',
@@ -92,31 +74,18 @@ const PERSON_TEMPLATE = {
     fields: [
         { id: 'name', label: '姓名', type: 'text', group: 'main', required: true },
         { id: 'role', label: '身份', type: 'text', group: 'main', placeholder: '药房主人 / 护卫 / 学徒' },
-        { id: 'relation', label: '与我的关系', type: 'text', group: 'main', placeholder: '收留我的人 / 债主 / 宿敌' },
-        { id: 'attitude', label: '对我的态度', type: 'text', group: 'main', placeholder: '戒备 / 温和 / 试探' },
-        { id: 'look', label: '外貌特征', type: 'text', group: 'extra', placeholder: '一眼能认出的特征' },
+        { id: 'age', label: '年龄', type: 'text', group: 'main', placeholder: '二十出头 / 三十七' },
+        { id: 'relation', label: '关系', type: 'text', group: 'main', scope: 'npc', placeholder: '收留我的人 / 债主 / 宿敌' },
+        { id: 'attitude', label: '对我的态度', type: 'text', group: 'main', scope: 'npc', placeholder: '戒备 / 温和 / 试探' },
+        { id: 'goal', label: '当前打算', type: 'text', group: 'main', scope: 'self', placeholder: '接下来想做什么' },
+        { id: 'state', label: '我的处境', type: 'text', group: 'main', scope: 'self', placeholder: '伤势、体力、被谁盯着' },
+        { id: 'recent', label: '最近动态', type: 'textarea', group: 'main', placeholder: '这一轮发生了什么' },
+        { id: 'place', label: '所在地', type: 'text', group: 'extra', placeholder: '当前所在或常驻地' },
+        { id: 'birthday', label: '生日', type: 'text', group: 'extra', placeholder: '具体日子，或某个季节' },
+        { id: 'look', label: '外貌', type: 'text', group: 'extra', placeholder: '一眼能认出的特征' },
         { id: 'speech', label: '说话方式', type: 'text', group: 'extra', placeholder: '口癖、语气' },
-        { id: 'lastEvent', label: '最近互动', type: 'textarea', group: 'extra', placeholder: '这一轮和他发生了什么' },
-    ],
-};
-
-/*
- * 快照型模板：singleton 只保留最新一条，覆盖式更新
- */
-const STATE_TEMPLATE = {
-    id: 'state',
-    name: '当前状态',
-    builtin: true,
-    singleton: true,
-    autofill: false,
-    fields: [
-        { id: 'scene', label: '场景', type: 'text', group: 'main', placeholder: '在哪、什么时辰、什么天气' },
-        { id: 'present', label: '在场', type: 'text', group: 'main', placeholder: '在场的人' },
-        { id: 'doing', label: '正在进行', type: 'text', group: 'main', placeholder: '此刻正在做的事' },
-        { id: 'mood', label: '气氛', type: 'select', group: 'extra', options: ['平静', '轻松', '暧昧', '紧张', '压抑', '危险', '悲伤', '热烈'] },
-        { id: 'myself', label: '我的状态', type: 'textarea', group: 'extra', placeholder: '身体、情绪、手里拿着什么' },
-        { id: 'other', label: '对方状态', type: 'textarea', group: 'extra', placeholder: '情绪、态度、小动作' },
-        { id: 'thread', label: '未了结', type: 'textarea', group: 'extra', placeholder: '悬着还没解决的事' },
+        { id: 'carry', label: '随身之物', type: 'text', group: 'extra', scope: 'self', placeholder: '身上带着的东西' },
+        { id: 'note', label: '备注', type: 'text', group: 'extra', placeholder: '其它值得留意的' },
     ],
 };
 
@@ -179,7 +148,7 @@ function persist() {
  * ========================================================= */
 
 function getTemplates() {
-    const base = [PERSON_TEMPLATE, GENERAL_TEMPLATE, STATE_TEMPLATE, ...S.templates];
+    const base = [PERSON_TEMPLATE, ...S.templates];
     const flags = S.tplFlags || {};
     return base.map(t => (flags[t.id] ? { ...t, ...flags[t.id] } : t));
 }
@@ -189,7 +158,7 @@ function entityTemplates() {
 }
 
 function getTemplate(id) {
-    return getTemplates().find(t => t.id === id) || GENERAL_TEMPLATE;
+    return getTemplates().find(t => t.id === id) || PERSON_TEMPLATE;
 }
 
 function snapshotTemplates() {
@@ -720,14 +689,22 @@ function parseFilled(tpl, raw) {
  * ========================================================= */
 
 function buildPersonPrompt(transcript, tpl) {
-    const labels = tpl.fields.filter(f => f.id !== tpl.keyField).map(f => f.label);
+    const keyId = tpl.keyField || 'name';
+    const common = tpl.fields.filter(f => !f.scope && f.id !== keyId).map(f => f.label);
+    const npcOnly = tpl.fields.filter(f => f.scope === 'npc').map(f => f.label);
+    const selfOnly = tpl.fields.filter(f => f.scope === 'self').map(f => f.label);
+    const me = String(ctx.name1 || '').trim() || '玩家角色';
+
     return [
         '下面是一段角色扮演对话。请找出这段对话里出现的人物，为每个人物填写档案。',
         '',
         '输出格式（严格遵守，不要输出解释、不要代码块）：',
         '【人物名】重要度:1-5',
-        `随后每行一条字段，格式为「字段名：内容」。可用字段：${labels.join('、')}`,
-        '每个人物一段，段与段之间空一行。同一个人物只输出一次。',
+        '随后每行一条字段，格式为「字段名：内容」，不要加编号或符号。',
+        '',
+        `所有人物都要填的字段：${common.join('、')}`,
+        npcOnly.length ? `除「${me}」以外的人物，另外填：${npcOnly.join('、')}` : '',
+        selfOnly.length ? `如果这个人就是「${me}」（玩家自己），改填这些：${selfOnly.join('、')}` : '',
         '',
         '重要度标准：',
         '5 = 主角或贯穿剧情的核心角色',
@@ -739,12 +716,12 @@ function buildPersonPrompt(transcript, tpl) {
         '',
         '规则：',
         '- 只写对话里明确出现的信息。没写的字段整行省略，不要写「未知」「无」「未提及」。',
-        '- 不要编造外貌、身份、身世。没提到就空着。',
+        '- 不要编造外貌、年龄、生日、身世。没提到就空着。',
         '- 人称指代不明时宁可不写，也不要猜。',
         '',
         '对话：',
         transcript,
-    ].join('\n');
+    ].filter(x => x !== '').join('\n');
 }
 
 function parsePeople(raw, tpl) {
@@ -760,13 +737,14 @@ function parsePeople(raw, tpl) {
         if (!name) continue;
 
         const values = { [keyId]: name };
+        const allowed = new Set(visibleFields(tpl, isSelfName(name)).map(f => f.id));
 
         for (const line of block.split(/\r?\n/).slice(1)) {
             const m = line.trim().match(/^[-*•\s]*([^：:]{1,12})\s*[：:]\s*(.+)$/);
             if (!m) continue;
 
             const fid = labelToId.get(m[1].trim());
-            if (!fid || fid === keyId) continue;
+            if (!fid || fid === keyId || !allowed.has(fid)) continue;
 
             const val = m[2].trim().slice(0, 200);
             if (!val || /^(无|未知|未提及|不明|不详|n\/a|none|-|—)$/i.test(val)) continue;
@@ -1363,7 +1341,7 @@ function switchTab(name) {
     const map = {
         timeline: `<button class="mw-btn mw-btn-primary" data-mw="weave">记一条</button>
                    <button class="mw-btn" data-mw="backfill">补全部</button>`,
-        records: `<button class="mw-btn mw-btn-primary" data-mw="new-record">＋ 新建记录</button>`,
+        records: '',
         templates: `<button class="mw-btn mw-btn-primary" data-mw="new-tpl">＋ 新建模板</button>
                     <button class="mw-btn" data-mw="import-tpl">导入 JSON</button>`,
         settings: '',
@@ -1961,7 +1939,7 @@ function openForm(recordId = null) {
     editingRecordId = rec?.id || null;
     editingSnapshotTpl = null;
 
-    const tplId = rec?.templateId || GENERAL_TEMPLATE.id;
+    const tplId = rec?.templateId || PERSON_TEMPLATE.id;
     renderFormShell(rec, tplId, 'record');
     openDrawer();
 }
@@ -2029,8 +2007,13 @@ function renderFormShell(rec, tplId, mode = 'record') {
     const values = rec ? { ...(rec.values || {}) } : {};
     if (rec?.tags?.length) values.tags = rec.tags.slice();
 
-    const mainFields = tpl.fields.filter(f => f.group === 'main');
-    const extraFields = tpl.fields.filter(f => f.group === 'extra');
+    let fieldSet = tpl.fields;
+    if (isEntity && rec) {
+        const recName = rec.values?.[tpl.keyField || 'name'] || rec.key;
+        fieldSet = visibleFields(tpl, isSelfName(recName));
+    }
+    const mainFields = fieldSet.filter(f => f.group === 'main');
+    const extraFields = fieldSet.filter(f => f.group === 'extra');
 
     const imp = rec?.importance ?? 3;
 
@@ -2132,8 +2115,8 @@ function saveRecord() {
     }
 
     const tplId = el('[data-dr="tplsel"]', d)?.value
-        || (editingRecordId ? findItem(editingRecordId)?.templateId : GENERAL_TEMPLATE.id)
-        || GENERAL_TEMPLATE.id;
+        || (editingRecordId ? findItem(editingRecordId)?.templateId : PERSON_TEMPLATE.id)
+        || PERSON_TEMPLATE.id;
     const tpl = getTemplate(tplId);
 
     const { values, tags, importance } = collectValues();
@@ -2282,12 +2265,27 @@ function minuteLabel(ts) {
 /* 展开状态跨重绘保留 */
 const openPeople = new Set();
 
+function isSelfName(name) {
+    const me = String(ctx.name1 || '').trim();
+    return !!me && String(name || '').trim() === me;
+}
+
+/** 按主角 / 非主角筛出该显示的字段 */
+function visibleFields(tpl, isSelf) {
+    return tpl.fields.filter(f => {
+        if (!f.scope) return true;
+        return isSelf ? f.scope === 'self' : f.scope === 'npc';
+    });
+}
+
 function personRowHTML(t, p) {
     const keyId = t.keyField || 'name';
     const name = p.values?.[keyId] || p.key;
+    const isSelf = isSelfName(name);
+    const fields = visibleFields(t, isSelf);
     const brief = [p.values?.role, p.values?.relation].filter(Boolean).join(' · ');
 
-    const detail = t.fields
+    const detail = fields
         .filter(f => f.id !== keyId)
         .map(f => {
             const v = p.values?.[f.id];
@@ -2300,10 +2298,10 @@ function personRowHTML(t, p) {
     const open = openPeople.has(tk);
 
     return `
-      <div class="mw-person ${open ? 'open' : ''}" data-tk="${esc(tk)}">
+      <div class="mw-person ${isSelf ? 'is-self' : ''} ${open ? 'open' : ''}" data-tk="${esc(tk)}">
         <button class="mw-person-head" data-person-toggle>
           <span class="mw-person-dot lv${p.importance}"></span>
-          <span class="mw-person-name">${esc(name)}</span>
+          <span class="mw-person-name">${esc(name)}${isSelf ? '<i class="mw-self-tag">我</i>' : ''}</span>
           <span class="mw-person-brief">${esc(brief)}</span>
           <span class="mw-person-arrow">›</span>
         </button>
@@ -2321,7 +2319,12 @@ function personRowHTML(t, p) {
 }
 
 function entityCardHTML(t) {
-    const people = listEntities(t.id);
+    const keyId = t.keyField || 'name';
+    const people = listEntities(t.id).sort((a, b) => {
+        const sa = isSelfName(a.values?.[keyId] || a.key) ? 1 : 0;
+        const sb = isSelfName(b.values?.[keyId] || b.key) ? 1 : 0;
+        return sb - sa || (b.importance - a.importance) || (b.updatedTs - a.updatedTs);
+    });
     const ttl = Math.max(1, Number(S.personTTL) || 10);
 
     return `
@@ -2422,7 +2425,7 @@ function toggleTemplateFlag(tplId, flag) {
 }
 
 function createTemplate() {
-    openTemplateEditor(GENERAL_TEMPLATE.id, true);
+    openTemplateEditor(PERSON_TEMPLATE.id, true);
 }
 
 function importTemplate() {
@@ -2663,11 +2666,11 @@ async function init() {
         weave: manualWeave,
         backfill: backfillAll,
         fill: () => { store().fillSig = ''; return autoUpdatePeople(); },
-        template: () => openTemplateEditor(GENERAL_TEMPLATE.id, true),
+        template: () => openTemplateEditor(PERSON_TEMPLATE.id, true),
         get settings() { return S; },
         get store() { return store(); },
         exportTemplate() {
-            return JSON.stringify(GENERAL_TEMPLATE, null, 2);
+            return JSON.stringify(PERSON_TEMPLATE, null, 2);
         },
         info() {
             const node = store();
