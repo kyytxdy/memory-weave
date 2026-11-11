@@ -1,24 +1,90 @@
 {
   "name": "人物档案",
-  "version": 2,
+  "version": 3,
   "entity": true,
   "keyField": "name",
   "autofill": true,
-  "description": "一个人物一张卡，按 keyField（姓名）分卡，同名自动合并。scope 标记字段归属：self 只在主角卡出现，npc 只在其他人物卡出现，不写是通用字段。主角是 ctx.name1（你的人设名）。",
+  "description": "一个人物一张卡，按 name 分卡，同名合并。scope：self 只在主角卡出现，npc 只在其他人物卡出现，不写是通用。hint 是给模型的字段说明，会拼进提示词的字段清单里。",
   "fields": [
-    { "id": "name", "label": "姓名", "type": "text", "group": "main", "required": true },
-    { "id": "role", "label": "身份", "type": "text", "group": "main", "placeholder": "药房主人 / 护卫 / 学徒" },
-    { "id": "age", "label": "年龄", "type": "text", "group": "main", "placeholder": "二十出头 / 三十七" },
-    { "id": "relation", "label": "关系", "type": "text", "group": "main", "scope": "npc", "placeholder": "收留我的人 / 债主 / 宿敌" },
-    { "id": "attitude", "label": "对我的态度", "type": "text", "group": "main", "scope": "npc", "placeholder": "戒备 / 温和 / 试探" },
-    { "id": "goal", "label": "当前打算", "type": "text", "group": "main", "scope": "self", "placeholder": "接下来想做什么" },
-    { "id": "state", "label": "我的处境", "type": "text", "group": "main", "scope": "self", "placeholder": "伤势、体力、被谁盯着" },
-    { "id": "recent", "label": "最近动态", "type": "textarea", "group": "main", "placeholder": "这一轮发生了什么" },
-    { "id": "place", "label": "所在地", "type": "text", "group": "extra", "placeholder": "当前所在或常驻地" },
-    { "id": "birthday", "label": "生日", "type": "text", "group": "extra", "placeholder": "具体日子，或某个季节" },
-    { "id": "look", "label": "外貌", "type": "text", "group": "extra", "placeholder": "一眼能认出的特征" },
-    { "id": "speech", "label": "说话方式", "type": "text", "group": "extra", "placeholder": "口癖、语气" },
-    { "id": "carry", "label": "随身之物", "type": "text", "group": "extra", "scope": "self", "placeholder": "身上带着的东西" },
-    { "id": "note", "label": "备注", "type": "text", "group": "extra", "placeholder": "其它值得留意的" }
+    {
+      "id": "name",
+      "label": "姓名",
+      "type": "text",
+      "group": "main",
+      "required": true
+    },
+    {
+      "id": "role",
+      "label": "身份",
+      "type": "text",
+      "group": "main",
+      "hint": "职业或社会角色，一句话说清"
+    },
+    {
+      "id": "age",
+      "label": "年龄",
+      "type": "text",
+      "group": "main",
+      "hint": "对话里明确提到才写，不要推测"
+    },
+    {
+      "id": "relation",
+      "label": "关系",
+      "type": "text",
+      "group": "main",
+      "scope": "npc",
+      "hint": "和玩家角色的关系"
+    },
+    {
+      "id": "attitude",
+      "label": "对我的态度",
+      "type": "text",
+      "group": "main",
+      "scope": "npc",
+      "hint": "从语气和举动判断，不要猜内心"
+    },
+    {
+      "id": "time",
+      "label": "时间",
+      "type": "text",
+      "group": "main",
+      "scope": "self",
+      "hint": "故事内的第几天、什么时辰，如「第三天的深夜」"
+    },
+    {
+      "id": "recent",
+      "label": "最近动态",
+      "type": "textarea",
+      "group": "main",
+      "hint": "这一轮里这个人做了什么"
+    },
+    {
+      "id": "place",
+      "label": "所在地",
+      "type": "text",
+      "group": "extra",
+      "hint": "当前所在或常驻地"
+    },
+    {
+      "id": "birthday",
+      "label": "生日",
+      "type": "text",
+      "group": "extra",
+      "hint": "对话里提到过才写，可以只写到季节"
+    },
+    {
+      "id": "look",
+      "label": "外貌",
+      "type": "text",
+      "group": "extra",
+      "hint": "一眼能认出的特征，不要泛泛而谈"
+    },
+    {
+      "id": "note",
+      "label": "备注",
+      "type": "text",
+      "group": "extra",
+      "hint": "其它值得留意的细节"
+    }
   ]
 }

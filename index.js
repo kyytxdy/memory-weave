@@ -73,19 +73,16 @@ const PERSON_TEMPLATE = {
     autofill: true,
     fields: [
         { id: 'name', label: '姓名', type: 'text', group: 'main', required: true },
-        { id: 'role', label: '身份', type: 'text', group: 'main', placeholder: '药房主人 / 护卫 / 学徒' },
-        { id: 'age', label: '年龄', type: 'text', group: 'main', placeholder: '二十出头 / 三十七' },
-        { id: 'relation', label: '关系', type: 'text', group: 'main', scope: 'npc', placeholder: '收留我的人 / 债主 / 宿敌' },
-        { id: 'attitude', label: '对我的态度', type: 'text', group: 'main', scope: 'npc', placeholder: '戒备 / 温和 / 试探' },
-        { id: 'goal', label: '当前打算', type: 'text', group: 'main', scope: 'self', placeholder: '接下来想做什么' },
-        { id: 'state', label: '我的处境', type: 'text', group: 'main', scope: 'self', placeholder: '伤势、体力、被谁盯着' },
-        { id: 'recent', label: '最近动态', type: 'textarea', group: 'main', placeholder: '这一轮发生了什么' },
-        { id: 'place', label: '所在地', type: 'text', group: 'extra', placeholder: '当前所在或常驻地' },
-        { id: 'birthday', label: '生日', type: 'text', group: 'extra', placeholder: '具体日子，或某个季节' },
-        { id: 'look', label: '外貌', type: 'text', group: 'extra', placeholder: '一眼能认出的特征' },
-        { id: 'speech', label: '说话方式', type: 'text', group: 'extra', placeholder: '口癖、语气' },
-        { id: 'carry', label: '随身之物', type: 'text', group: 'extra', scope: 'self', placeholder: '身上带着的东西' },
-        { id: 'note', label: '备注', type: 'text', group: 'extra', placeholder: '其它值得留意的' },
+        { id: 'role', label: '身份', type: 'text', group: 'main', hint: '职业或社会角色，一句话说清' },
+        { id: 'age', label: '年龄', type: 'text', group: 'main', hint: '对话里明确提到才写，不要推测' },
+        { id: 'relation', label: '关系', type: 'text', group: 'main', scope: 'npc', hint: '和玩家角色的关系' },
+        { id: 'attitude', label: '对我的态度', type: 'text', group: 'main', scope: 'npc', hint: '从语气和举动判断，不要猜内心' },
+        { id: 'time', label: '时间', type: 'text', group: 'main', scope: 'self', hint: '故事内的第几天、什么时辰，如「第三天的深夜」' },
+        { id: 'recent', label: '最近动态', type: 'textarea', group: 'main', hint: '这一轮里这个人做了什么' },
+        { id: 'place', label: '所在地', type: 'text', group: 'extra', hint: '当前所在或常驻地' },
+        { id: 'birthday', label: '生日', type: 'text', group: 'extra', hint: '对话里提到过才写，可以只写到季节' },
+        { id: 'look', label: '外貌', type: 'text', group: 'extra', hint: '一眼能认出的特征，不要泛泛而谈' },
+        { id: 'note', label: '备注', type: 'text', group: 'extra', hint: '其它值得留意的细节' },
     ],
 };
 
@@ -104,6 +101,7 @@ let editingRecordId = null;
 let editingTemplateId = null;
 let editingSnapshotTpl = null;
 let editingEntity = null;      // { tplId, key }
+let draftEntity = null;        // 正在改某个人物的字段时：{ tplId, key }
 let draftTemplate = null;
 
 /* =========================================================
@@ -252,6 +250,7 @@ function upsertEntity(tplId, key, values, importance, round) {
         key,
         values: merged,
         importance: Math.max(Number(importance) || 0, prev?.importance || 0),
+        fields: prev?.fields || getTemplate(tplId).fields.map(f => ({ ...f })),
         ts: prev?.ts || now,
         updatedTs: now,
         lastRound: round,
@@ -690,9 +689,10 @@ function parseFilled(tpl, raw) {
 
 function buildPersonPrompt(transcript, tpl) {
     const keyId = tpl.keyField || 'name';
-    const common = tpl.fields.filter(f => !f.scope && f.id !== keyId).map(f => f.label);
-    const npcOnly = tpl.fields.filter(f => f.scope === 'npc').map(f => f.label);
-    const selfOnly = tpl.fields.filter(f => f.scope === 'self').map(f => f.label);
+    const fmt = list => list.map(f => (f.hint ? `${f.label}（${f.hint}）` : f.label)).join('、');
+    const common = fmt(tpl.fields.filter(f => !f.scope && f.id !== keyId));
+    const npcOnly = fmt(tpl.fields.filter(f => f.scope === 'npc'));
+    const selfOnly = fmt(tpl.fields.filter(f => f.scope === 'self'));
     const me = String(ctx.name1 || '').trim() || '玩家角色';
 
     return [
@@ -702,9 +702,9 @@ function buildPersonPrompt(transcript, tpl) {
         '【人物名】重要度:1-5',
         '随后每行一条字段，格式为「字段名：内容」，不要加编号或符号。',
         '',
-        `所有人物都要填的字段：${common.join('、')}`,
-        npcOnly.length ? `除「${me}」以外的人物，另外填：${npcOnly.join('、')}` : '',
-        selfOnly.length ? `如果这个人就是「${me}」（玩家自己），改填这些：${selfOnly.join('、')}` : '',
+        `所有人物都要填的字段：${common}`,
+        npcOnly ? `除「${me}」以外的人物，另外填：${npcOnly}` : '',
+        selfOnly ? `如果这个人就是「${me}」（玩家自己），改填这些：${selfOnly}` : '',
         '',
         '重要度标准：',
         '5 = 主角或贯穿剧情的核心角色',
@@ -1260,6 +1260,9 @@ function bindPanelEvents(app) {
             return;
         }
 
+        const personFields = ev.target.closest('[data-person-fields]');
+        if (personFields) { openEntityFieldEditor(personFields.dataset.tpl, personFields.dataset.key); return; }
+
         const personAdd = ev.target.closest('[data-person-add]');
         if (personAdd) { openPersonForm(personAdd.dataset.personAdd, null); return; }
 
@@ -1805,6 +1808,12 @@ function ensureDrawer() {
         const tin = ev.target.closest('[data-tpl="label"]');
         if (tin) { draftTemplate.fields[Number(tin.dataset.idx)].label = tin.value; return; }
 
+        const thint = ev.target.closest('[data-tpl="hint"]');
+        if (thint) {
+            draftTemplate.fields[Number(thint.dataset.idx)].hint = thint.value;
+            return;
+        }
+
         const opt = ev.target.closest('[data-tpl="options"]');
         if (opt) {
             draftTemplate.fields[Number(opt.dataset.idx)].options = opt.value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
@@ -1831,6 +1840,13 @@ function ensureDrawer() {
             paintTemplateEditor();
             return;
         }
+        const tscope = ev.target.closest('[data-tpl="scope"]');
+        if (tscope) {
+            const f = draftTemplate.fields[Number(tscope.dataset.idx)];
+            f.scope = tscope.value || undefined;
+            return;
+        }
+
         const tname = ev.target.closest('[data-tpl="name"]');
         if (tname) { draftTemplate.name = tname.value.trim() || '未命名模板'; return; }
 
@@ -1883,6 +1899,7 @@ function closeDrawer() {
     editingTemplateId = null;
     editingSnapshotTpl = null;
     editingEntity = null;
+    draftEntity = null;
     draftTemplate = null;
 }
 
@@ -2010,7 +2027,8 @@ function renderFormShell(rec, tplId, mode = 'record') {
     let fieldSet = tpl.fields;
     if (isEntity && rec) {
         const recName = rec.values?.[tpl.keyField || 'name'] || rec.key;
-        fieldSet = visibleFields(tpl, isSelfName(recName));
+        const base = rec.fields ? { ...tpl, fields: rec.fields } : tpl;
+        fieldSet = visibleFields(base, isSelfName(recName));
     }
     const mainFields = fieldSet.filter(f => f.group === 'main');
     const extraFields = fieldSet.filter(f => f.group === 'extra');
@@ -2156,6 +2174,28 @@ function saveRecord() {
 
 /* ---------- 模板编辑器 ---------- */
 
+/** 单独改某个人物的字段：复制一份到他自己身上，不动模板 */
+function openEntityFieldEditor(tplId, key) {
+    if (!ui.app) buildUI();
+    if (!ui.app.classList.contains('mw-open')) openPanel();
+    ensureDrawer();
+
+    const ent = getEntity(tplId, key);
+    if (!ent) return;
+
+    const base = ent.fields || getTemplate(tplId).fields;
+    const name = ent.values?.['name'] || key;
+
+    draftTemplate = {
+        id: 'entity:' + key,
+        name,
+        fields: base.map(f => ({ ...f })),
+    };
+    draftEntity = { tplId, key };
+    paintTemplateEditor();
+    openDrawer();
+}
+
 function openTemplateEditor(tplId, isNew = false) {
     buildUI();
     ensureDrawer();
@@ -2177,11 +2217,23 @@ function openTemplateEditor(tplId, isNew = false) {
 
 function paintTemplateEditor() {
     const d = el('#mw-drawer');
-    el('[data-dr="title"]', d).innerHTML = `编辑模板<small>TEMPLATE</small>`;
-    el('[data-dr="tplbar"]', d).innerHTML = `<span style="font-size:11.5px;color:var(--mw-faint)">字段越少，手机上填得越快</span>`;
+    el('[data-dr="title"]', d).innerHTML = draftEntity
+        ? `改 ${esc(draftTemplate.name)} 的字段<small>只影响这一个人</small>`
+        : `编辑模板<small>TEMPLATE</small>`;
+    el('[data-dr="tplbar"]', d).innerHTML = draftEntity
+        ? ''
+        : `<span style="font-size:11.5px;color:var(--mw-faint)">改的是你自己的副本</span>`;
+
+    const scopeSelect = f => `
+        <select data-tpl="scope" data-idx="__IDX__">
+          <option value=""${!f.scope ? ' selected' : ''}>通用</option>
+          <option value="self"${f.scope === 'self' ? ' selected' : ''}>仅主角</option>
+          <option value="npc"${f.scope === 'npc' ? ' selected' : ''}>仅其他</option>
+        </select>`;
 
     const body = el('[data-dr="body"]', d);
     body.innerHTML = `
+      ${draftEntity ? '' : `
       <div class="mw-field">
         <label>模板名称</label>
         <input type="text" data-tpl="name" value="${esc(draftTemplate.name)}">
@@ -2197,30 +2249,38 @@ function paintTemplateEditor() {
           <label class="mw-switch"><input type="checkbox" data-tpl="autofill"${draftTemplate.autofill ? ' checked' : ''}><i></i></label>
         </div>
       </div>
+      `}
 
       <div class="mw-group-title" style="padding-left:0">字段</div>
       <div data-tpl="fields">
         ${draftTemplate.fields.map((f, i) => `
           <div class="mw-fieldedit ${f.group === 'main' ? 'major' : ''}">
-            <input type="text" data-tpl="label" data-idx="${i}" value="${esc(f.label)}">
-            <select data-tpl="type" data-idx="${i}">
-              ${FIELD_TYPES.map(t => `<option value="${t.v}"${t.v === f.type ? ' selected' : ''}>${t.label}</option>`).join('')}
-            </select>
-            <button class="mw-mini" data-tpl="toggle-group" data-idx="${i}" title="主字段/次字段">${f.group === 'main' ? '★' : '☆'}</button>
-            <button class="mw-mini" data-tpl="move-field" data-idx="${i}" data-dir="-1" title="上移">↑</button>
-            <button class="mw-mini" data-tpl="move-field" data-idx="${i}" data-dir="1" title="下移">↓</button>
-            <button class="mw-mini" data-tpl="del-field" data-idx="${i}" title="删除">×</button>
+            <div class="mw-fe-row">
+              <input type="text" data-tpl="label" data-idx="${i}" value="${esc(f.label)}" placeholder="字段名">
+              ${scopeSelect(f).replace('__IDX__', i)}
+            </div>
+            <div class="mw-fe-row">
+              <select data-tpl="type" data-idx="${i}">
+                ${FIELD_TYPES.map(t => `<option value="${t.v}"${t.v === f.type ? ' selected' : ''}>${t.label}</option>`).join('')}
+              </select>
+              <button class="mw-mini" data-tpl="toggle-group" data-idx="${i}" title="主体 / 折叠">${f.group === 'main' ? '★' : '☆'}</button>
+              <button class="mw-mini" data-tpl="move-field" data-idx="${i}" data-dir="-1" title="上移">↑</button>
+              <button class="mw-mini" data-tpl="move-field" data-idx="${i}" data-dir="1" title="下移">↓</button>
+              <button class="mw-mini" data-tpl="del-field" data-idx="${i}" title="删除">×</button>
+            </div>
+            <input type="text" class="mw-fe-hint" data-tpl="hint" data-idx="${i}"
+                   value="${esc(f.hint || '')}" placeholder="给模型的提示，如「明确提到才写」">
+            ${f.type === 'select' ? `
+              <input type="text" class="mw-fe-hint" data-tpl="options" data-idx="${i}"
+                     value="${esc((f.options || []).join('，'))}" placeholder="选项，用逗号分隔">` : ''}
           </div>
-          ${f.type === 'select' ? `
-            <div class="mw-field" style="margin:-2px 0 10px">
-              <input type="text" data-tpl="options" data-idx="${i}"
-                     value="${esc((f.options || []).join('，'))}" placeholder="选项，用逗号分隔">
-            </div>` : ''}
         `).join('')}
       </div>
       <button class="mw-btn" data-tpl="add-field" style="width:100%;margin-top:4px">＋ 添加字段</button>
-      <p style="font-size:11px;color:var(--mw-faint);line-height:1.6;margin:12px 2px 4px">
-        ★ 表示主字段，直接显示在卡片上；☆ 表示次字段，折叠在「展开更多」里。
+      <p style="font-size:11px;color:var(--mw-faint);line-height:1.7;margin:12px 2px 4px">
+        ★ 主体（直接显示）· ☆ 折叠（点开才看到）<br>
+        通用 = 所有人都填；仅主角 = 只在你自己那张卡上出现；仅其他 = 只在别人卡上出现。<br>
+        提示词会拼进给模型的字段清单，用来限定怎么填，比如「不要推测」。
       </p>
     `;
     body.scrollTop = 0;
@@ -2238,6 +2298,19 @@ function saveTemplate() {
         f.label = String(f.label || `字段${i + 1}`).slice(0, 16);
         f.id = f.id || 'f_' + i;
     });
+
+    if (draftEntity) {
+        const ent = getEntity(draftEntity.tplId, draftEntity.key);
+        if (ent) {
+            ent.fields = draftTemplate.fields.map(f => ({ ...f }));
+            persist();
+        }
+        draftEntity = null;
+        renderTemplatePanel();
+        closeDrawer();
+        toast('字段已更新');
+        return;
+    }
 
     const idx = S.templates.findIndex(t => t.id === draftTemplate.id);
     if (idx >= 0) S.templates[idx] = { ...draftTemplate };
@@ -2282,7 +2355,8 @@ function personRowHTML(t, p) {
     const keyId = t.keyField || 'name';
     const name = p.values?.[keyId] || p.key;
     const isSelf = isSelfName(name);
-    const fields = visibleFields(t, isSelf);
+    const tplDef = p.fields ? { ...t, fields: p.fields } : t;
+    const fields = visibleFields(tplDef, isSelf);
     const brief = [p.values?.role, p.values?.relation].filter(Boolean).join(' · ');
 
     const detail = fields
@@ -2312,6 +2386,7 @@ function personRowHTML(t, p) {
           <div class="mw-person-foot">
             <span class="mw-snap-time">更新于 ${minuteLabel(p.updatedTs)}</span>
             <button class="mw-link" data-person-edit data-tpl="${esc(t.id)}" data-key="${esc(p.key)}">修改</button>
+            <button class="mw-link" data-person-fields data-tpl="${esc(t.id)}" data-key="${esc(p.key)}">改字段</button>
             <button class="mw-link danger" data-person-del data-tpl="${esc(t.id)}" data-key="${esc(p.key)}">移除</button>
           </div>
         </div>

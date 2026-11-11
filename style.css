@@ -1622,16 +1622,22 @@ body.mw-locked {
 
 .mw-fieldedit {
     display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 9px 10px;
+    flex-direction: column;
+    gap: 6px;
+    padding: 9px 10px 10px;
     border-radius: 12px;
     background: rgba(255, 255, 255, 0.045);
     border: 1px solid rgba(255, 255, 255, 0.07);
     margin-bottom: 7px;
 }
 
-.mw-fieldedit input[type="text"] {
+.mw-fe-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.mw-fe-row input[type="text"] {
     flex: 1;
     min-width: 0;
     font-family: inherit;
@@ -1644,7 +1650,9 @@ body.mw-locked {
     outline: none;
 }
 
-.mw-fieldedit select {
+.mw-fe-row select {
+    flex: 0 0 auto;
+    max-width: 86px;
     font-family: inherit;
     font-size: 11px;
     padding: 6px 4px;
@@ -1653,20 +1661,42 @@ body.mw-locked {
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(255, 255, 255, 0.08);
     outline: none;
-    max-width: 76px;
 }
 
-.mw-fieldedit select option {
+.mw-fe-row select option {
     background: #14182a;
 }
 
-.mw-fieldedit .mw-mini {
+.mw-fe-hint {
+    width: 100%;
+    font-family: inherit;
+    font-size: 11.5px;
+    padding: 7px 9px;
+    border-radius: 8px;
+    color: var(--mw-dim);
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px dashed rgba(255, 255, 255, 0.1);
+    outline: none;
+    transition: 0.2s;
+}
+
+.mw-fe-hint::placeholder {
+    color: rgba(238, 241, 248, 0.22);
+}
+
+.mw-fe-hint:focus {
+    border-style: solid;
+    border-color: rgba(139, 147, 255, 0.45);
+    background: rgba(139, 147, 255, 0.06);
+}
+
+.mw-fe-row .mw-mini {
     width: 26px;
     height: 26px;
     border-radius: 7px;
     display: grid;
     place-items: center;
-    font-size: 13px;
+    font-size: 12px;
     color: var(--mw-faint);
     background: rgba(255, 255, 255, 0.05);
     flex: 0 0 auto;
