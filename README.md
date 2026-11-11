@@ -20,25 +20,34 @@ SillyTavern 长期记忆扩展。移动端优先，玻璃拟态界面。
 
 ## 安装
 
-### 方式一：直接拷目录（最快）
+### 从 GitHub 装（推荐，方便更新）
 
-把整个 `memory-weave` 文件夹放到：
+酒馆「扩展 → 安装扩展」，填这个地址：
 
 ```
-SillyTavern/public/scripts/extensions/third-party/memory-weave/
+https://github.com/kyytxdy/memory-weave
 ```
+
+装完刷新页面。
+
+### 手动安装
+
+把整个目录放进第三方扩展目录：
+
+| 版本 | 路径 |
+|---|---|
+| SillyTavern | `SillyTavern/public/scripts/extensions/third-party/memory-weave/` |
+| TauriTavern | `%APPDATA%\com.tauritavern.client\data\extensions\third-party\memory-weave\` |
+
+TauriTavern 的数据跟着 AppData 走，不在安装目录（`D:\TauriTavern`）里。
 
 重启酒馆，进「扩展」面板确认「织忆 · Memory Weave」已勾选。
-
-### 方式二：从 Git 仓库装
-
-把项目推到 GitHub 后，在酒馆「扩展 → 安装扩展」里填仓库地址。
 
 ### 装完之后
 
 - 手机端：右侧会出现一颗发光悬浮球，点它唤出面板
 - 也可以在扩展菜单（小魔杖图标）里找「织忆 · 记忆」
-- 悬浮球可以长按拖动，位置会被记住
+- 悬浮球可以拖动，位置会被记住
 
 ---
 
