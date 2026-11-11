@@ -2771,40 +2771,52 @@ function onChatChanged() {
 function bindEvents() {
     const { eventSource, eventTypes } = ctx;
 
-    eventSource.on(eventTypes.APP_READY, onReady);
+    // 有些客户端不暴露 eventSource，缺了也不能让初始化中断
+    const on = (name, fn) => {
+        if (!name) return;
+        if (typeof eventSource?.on !== 'function') return;
+        try {
+            eventSource.on(name, fn);
+        } catch (e) {
+            console.warn('[织忆] 事件绑定失败：' + name, e);
+        }
+    };
 
-    if (eventTypes.MESSAGE_RECEIVED) {
-        eventSource.on(eventTypes.MESSAGE_RECEIVED, () => {
-            updateStats();
-            scheduleAuto();
-            scheduleFill();
-        });
-    }
-    if (eventTypes.MESSAGE_SENT) {
-        eventSource.on(eventTypes.MESSAGE_SENT, () => {
-            updateStats();
-            scheduleAuto();
-        });
-    }
-    if (eventTypes.CHAT_CHANGED) eventSource.on(eventTypes.CHAT_CHANGED, onChatChanged);
-    if (eventTypes.GROUP_UPDATED) eventSource.on(eventTypes.GROUP_UPDATED, onChatChanged);
-    if (eventTypes.GENERATION_AFTER_COMMANDS) {
-        eventSource.on(eventTypes.GENERATION_AFTER_COMMANDS, refreshInjection);
+    on(eventTypes?.APP_READY, onReady);
+    on(eventTypes?.MESSAGE_RECEIVED, () => { updateStats(); scheduleAuto(); scheduleFill(); });
+    on(eventTypes?.MESSAGE_SENT, () => { updateStats(); scheduleAuto(); });
+    on(eventTypes?.CHAT_CHANGED, onChatChanged);
+    on(eventTypes?.GROUP_UPDATED, onChatChanged);
+    on(eventTypes?.GENERATION_AFTER_COMMANDS, refreshInjection);
+
+    // 没有事件系统时，靠定时器兜底把面板挂出来
+    if (typeof eventSource?.on !== 'function') {
+        console.warn('[织忆] 当前环境没有 eventSource，改用定时检查');
+        setTimeout(() => { if (!ready) onReady(); }, 800);
     }
 }
 
 function onReady() {
     if (ready) return;
     ready = true;
-    initChatCursor();
 
-    buildUI();
-    if (S.showFab) mountFab();
-    if (S.showMenuEntry) mountMenuEntry();
-    refreshInjection();
-    updateStats();
+    // 每一步都独立兜底：任何一环失败都不能挡住面板
+    const step = (name, fn) => {
+        try {
+            fn();
+        } catch (e) {
+            console.error(`[织忆] ${name} 失败`, e);
+        }
+    };
 
-    console.log('[织忆] 已就绪 ·', chatKey());
+    step('游标初始化', () => initChatCursor());
+    step('构建面板', () => buildUI());
+    step('挂载悬浮球', () => { if (S.showFab) mountFab(); });
+    step('挂载菜单项', () => { if (S.showMenuEntry) mountMenuEntry(); });
+    step('写入上下文', () => { if (ready) refreshInjection(); });
+    step('刷新统计', () => updateStats());
+
+    console.log('[织忆] 已就绪 ·', chatKey(), '· 面板', ui.app ? '已挂载' : '未挂载');
 }
 
 /* =========================================================
@@ -2814,7 +2826,12 @@ function onReady() {
 async function init() {
     await ensureContext();
     loadSettings();
-    bindEvents();
+
+    try {
+        bindEvents();
+    } catch (e) {
+        console.warn('[织忆] 事件绑定整体失败，继续初始化', e);
+    }
 
     setTimeout(() => { if (!ready) onReady(); }, 2000);
 
