@@ -38,6 +38,9 @@ const DEFAULT_SETTINGS = {
     arcEvery: 10,             // 每几轮生成一条大总结
     injectBeats: 6,           // 注入多少条短总结
     injectArcs: 2,            // 注入多少条大总结
+    injectAll: false,         // 注入全部条目
+    hideOldMessages: false,   // 把已总结的旧对话移出上下文
+    keepRecentRounds: 20,     // 至少保留多少轮原文
     maxKeep: 500,
     showFab: true,
     showMenuEntry: true,
@@ -209,6 +212,7 @@ function store() {
     if (typeof node.arcMark !== 'number') node.arcMark = 0;
     if (!node.snapshots || typeof node.snapshots !== 'object') node.snapshots = {};
     if (!node.entities || typeof node.entities !== 'object') node.entities = {};
+    if (typeof node.hiddenUpTo !== 'number') node.hiddenUpTo = -1;
     if (typeof node.fillSig !== 'string') node.fillSig = '';
     return node;
 }
@@ -854,7 +858,64 @@ async function stepWeave(force = false) {
             console.warn('[织忆] 大总结生成失败', e);
         }
     }
+
+    // 先总结再隐藏，顺序不能反
+    if (beat) await pruneOldMessages();
+
     return { beat, arc };
+}
+
+/**
+ * 把已经总结过的旧对话移出上下文。
+ * 只hide已生成摘要的部分 —— 没总结就隐藏等于把信息扔了。
+ */
+/** 撤销隐藏，把消息还给模型 */
+async function unhideAll() {
+    if (typeof ctx.executeSlashCommandsWithOptions !== 'function') {
+        toast('当前版本不支持');
+        return;
+    }
+    const node = store();
+    if (node.hiddenUpTo < 0) { toast('没有隐藏过消息'); return; }
+
+    try {
+        await ctx.executeSlashCommandsWithOptions(`/unhide 0-${node.hiddenUpTo}`);
+        node.hiddenUpTo = -1;
+        persist();
+        toast('已全部放回上下文');
+    } catch (e) {
+        console.warn('[织忆] 恢复消息失败', e);
+        toast('恢复失败，看下控制台');
+    }
+}
+
+async function pruneOldMessages() {
+    if (!S.hideOldMessages) return;
+    if (typeof ctx.executeSlashCommandsWithOptions !== 'function') return;
+
+    const node = store();
+    const keep = Math.max(4, Number(S.keepRecentRounds) || 20);
+    const total = assistantTotal();
+
+    // 摘要覆盖到的轮次，与「保留最近 N 轮」取交集，才是能安全隐藏的上界
+    const safeUpTo = Math.min(node.beatMark, total - keep);
+    if (safeUpTo <= 0) return;
+
+    const target = seqHistory().filter(h => h.seq >= 1 && h.seq <= safeUpTo);
+    if (!target.length) return;
+
+    const from = target[0].index;
+    const to = target[target.length - 1].index;
+    if (node.hiddenUpTo >= to) return;
+
+    try {
+        await ctx.executeSlashCommandsWithOptions(`/hide ${from}-${to}`);
+        node.hiddenUpTo = to;
+        persist();
+        console.log(`[织忆] 第 ${from}–${to} 条已移出上下文（摘要覆盖到第 ${node.beatMark} 轮，保留最近 ${keep} 轮）`);
+    } catch (e) {
+        console.warn('[织忆] 隐藏旧消息失败', e);
+    }
 }
 
 async function autoTick() {
@@ -968,9 +1029,9 @@ function refreshInjection() {
     const node = store();
     const snap = snapshotBlock();
 
-    const arcs = node.arcs.slice(-Math.max(1, Number(S.injectArcs) || 2));
-    const beats = node.beats.slice(-Math.max(1, Number(S.injectBeats) || 6));
-    const memos = node.memos.slice(-3);
+    const arcs = S.injectAll ? node.arcs : node.arcs.slice(-Math.max(1, Number(S.injectArcs) || 2));
+    const beats = S.injectAll ? node.beats : node.beats.slice(-Math.max(1, Number(S.injectBeats) || 6));
+    const memos = S.injectAll ? node.memos : node.memos.slice(-3);
 
     const parts = ['<long_term_memory>'];
     let has = false;
@@ -1176,6 +1237,25 @@ function buildUI() {
               </div>
             </div>
 
+            <div class="mw-group">
+              <div class="mw-group-title">上下文预算</div>
+              <div class="mw-row">
+                <div class="mw-row-main"><b>注入全部条目</b><small>不再只带最近几条，所有摘要都进上下文</small></div>
+                <label class="mw-switch"><input type="checkbox" data-opt="injectAll"><i></i></label>
+              </div>
+              <div class="mw-row">
+                <div class="mw-row-main"><b>旧对话移出上下文</b><small>已总结的部分隐藏：界面上还看得到，模型读不到</small></div>
+                <label class="mw-switch"><input type="checkbox" data-opt="hideOldMessages"><i></i></label>
+              </div>
+              <div class="mw-row mw-row-col">
+                <div class="mw-row-main"><b>始终保留最近</b><small>最后 <span data-mw="val-keep">20</span> 轮原文不动</small></div>
+                <input type="range" min="6" max="60" step="2" data-opt="keepRecentRounds">
+              </div>
+              <div class="mw-row">
+                <button class="mw-btn" data-mw="unhide" style="flex:1">把隐藏的消息放回来</button>
+              </div>
+            </div>
+
             <div class="mw-group mw-danger">
               <button class="mw-btn mw-btn-danger" data-mw="clear">清空本角色的全部记忆</button>
             </div>
@@ -1220,6 +1300,7 @@ function bindPanelEvents(app) {
         if (ev.target.closest('[data-mw="weave"]')) { manualWeave(); return; }
         if (ev.target.closest('[data-mw="backfill"]')) { backfillAll(); return; }
         if (ev.target.closest('[data-mw="clear"]')) { clearMemories(); return; }
+        if (ev.target.closest('[data-mw="unhide"]')) { unhideAll(); return; }
 
         if (ev.target.closest('[data-mw="new-record"]')) { openForm(); return; }
         if (ev.target.closest('[data-mw="new-tpl"]')) { createTemplate(); return; }
@@ -1370,11 +1451,13 @@ function syncSettingsUI() {
     const vb = el('[data-mw="val-beat"]');
     const va = el('[data-mw="val-arc"]');
     const vi = el('[data-mw="val-inject"]');
+    const vk = el('[data-mw="val-keep"]');
     const vt = el('[data-mw="val-ttl"]');
     const vimp = el('[data-mw="val-imp"]');
     if (vb) vb.textContent = S.beatEvery;
     if (va) va.textContent = S.arcEvery;
     if (vi) vi.textContent = S.injectBeats;
+    if (vk) vk.textContent = S.keepRecentRounds;
     if (vt) vt.textContent = S.personTTL;
     if (vimp) vimp.textContent = S.personMinImportance;
 }
@@ -1388,6 +1471,7 @@ function applyOption(input, isRange = false) {
     if (key === 'beatEvery') el('[data-mw="val-beat"]').textContent = S.beatEvery;
     if (key === 'arcEvery') el('[data-mw="val-arc"]').textContent = S.arcEvery;
     if (key === 'injectBeats') el('[data-mw="val-inject"]').textContent = S.injectBeats;
+    if (key === 'keepRecentRounds') el('[data-mw="val-keep"]').textContent = S.keepRecentRounds;
     if (key === 'personTTL') el('[data-mw="val-ttl"]').textContent = S.personTTL;
     if (key === 'personMinImportance') el('[data-mw="val-imp"]').textContent = S.personMinImportance;
     if (key === 'showFab') toggleFab(S.showFab);
