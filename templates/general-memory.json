@@ -1,0 +1,71 @@
+{
+  "name": "通用记忆表",
+  "version": 1,
+  "description": "织忆的基础模板。字段可按需增删，改完在「设置 → 记忆模板 → 导入 JSON」里导入即可。group 为 main 的字段直接显示在卡片上，为 extra 的字段折叠在「展开更多」里。type 支持 text / textarea / select / tags。",
+  "fields": [
+    {
+      "id": "title",
+      "label": "标题",
+      "type": "text",
+      "group": "main",
+      "required": true,
+      "placeholder": "一句话概括，如「初遇时的那场雨」"
+    },
+    {
+      "id": "category",
+      "label": "分类",
+      "type": "select",
+      "group": "main",
+      "options": ["事件", "人物", "地点", "物品", "规则", "关系", "承诺", "其他"]
+    },
+    {
+      "id": "subject",
+      "label": "涉及对象",
+      "type": "text",
+      "group": "main",
+      "placeholder": "这件事和谁有关"
+    },
+    {
+      "id": "detail",
+      "label": "经过 / 内容",
+      "type": "textarea",
+      "group": "main",
+      "placeholder": "发生了什么，说清了什么"
+    },
+    {
+      "id": "when",
+      "label": "时间",
+      "type": "text",
+      "group": "extra",
+      "placeholder": "故事内的第几天 / 季节"
+    },
+    {
+      "id": "place",
+      "label": "地点",
+      "type": "text",
+      "group": "extra",
+      "placeholder": "在哪里发生的"
+    },
+    {
+      "id": "quote",
+      "label": "关键台词",
+      "type": "textarea",
+      "group": "extra",
+      "placeholder": "值得原样记住的一句话"
+    },
+    {
+      "id": "change",
+      "label": "影响 / 变化",
+      "type": "textarea",
+      "group": "extra",
+      "placeholder": "关系、立场、心境上的变化"
+    },
+    {
+      "id": "tags",
+      "label": "标签",
+      "type": "tags",
+      "group": "extra",
+      "placeholder": "输入后按回车"
+    }
+  ]
+}

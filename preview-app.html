@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>织忆 · UI 预览</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background:
+      radial-gradient(60% 50% at 50% 0%, #1a1f3a 0%, transparent 70%),
+      radial-gradient(50% 40% at 80% 90%, #10202c 0%, transparent 70%),
+      #05070c;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    color: #eef1f8;
+  }
+</style>
+</head>
+<body>
+
+<script>
+  // 假数据：模拟酒馆上下文，让 index.js 原样跑起来
+  const HOUR = 3600 * 1000;
+  const DAY = 24 * HOUR;
+  const now = Date.now();
+
+  const chat = [];
+  for (let i = 0; i < 16; i++) {
+    chat.push({ is_user: i % 2 === 0, name: i % 2 === 0 ? '我' : '银', mes: `第 ${i + 1} 层的对话内容，用来撑起楼层统计。` });
+  }
+  chat.push(
+    { is_user: true, name: '我', mes: '那把伞你到底放哪了？' },
+    { is_user: false, name: '银', mes: '……柜子最上层。别问了，帮你去拿就是。' },
+    { is_user: true, name: '我', mes: '你居然记得。' },
+    { is_user: false, name: '银', mes: '你说过的东西，我记着。就这样。' },
+  );
+
+  const memories = [
+    {
+      kind: 'record', id: 'r1', ts: now - 1.2 * DAY, templateId: 'general',
+      title: '雨夜里的那把伞', importance: 4,
+      values: {
+        title: '雨夜里的那把伞', category: '事件', subject: '银',
+        detail: '第一次真正的交谈。她把伞塞过来，自己淋着雨走掉，嘴上还说顺路。',
+        when: '第三天的夜里', place: '旧书店门口', quote: '「别淋着，你会感冒。」',
+        change: '从这一晚起，防备松了一点。', tags: ['初遇', '雨'],
+      },
+      tags: ['初遇', '雨'],
+    },
+    {
+      kind: 'note', id: 'n1', ts: now - 1.1 * DAY,
+      text: '银从来不正眼看人，但会把杯子往你这边推。', cat: '关系', importance: 3,
+    },
+    {
+      kind: 'note', id: 'n2', ts: now - 5 * HOUR,
+      text: '旧书店的老板娘姓周，欠了银一个人情，可以打听消息。', cat: '设定', importance: 2,
+    },
+    {
+      kind: 'record', id: 'r2', ts: now - 3 * HOUR, templateId: 'general',
+      title: '关于「那件事」的沉默', importance: 5,
+      values: {
+        title: '关于「那件事」的沉默', category: '承诺', subject: '银',
+        detail: '只要问起她手背上那道疤，就会沉默很久，然后换个话题。答应过不再追问。',
+        quote: '「别再问了。就这一次。」',
+        change: '划出一条不能碰的边界。', tags: ['禁忌', '疤'],
+      },
+      tags: ['禁忌', '疤'],
+    },
+    {
+      kind: 'note', id: 'n3', ts: now - 2 * HOUR,
+      text: '她怕冷。天气转凉之后，话会变得更少。', cat: '情绪', importance: 3,
+    },
+    {
+      kind: 'note', id: 'n4', ts: now - 55 * 60 * 1000,
+      text: '约定过：下次下雪要一起出门，不许借故推掉。', cat: '承诺', importance: 4,
+    },
+  ];
+
+  const snapshots = {
+    state: {
+      kind: 'snapshot',
+      id: 's1',
+      templateId: 'state',
+      title: '当前状态',
+      values: {
+        scene: '旧书店二楼，雨小了些',
+        present: '银、周老板',
+        me: '手里还捏着那把没还回去的伞',
+        other: '靠在书架边，语气比刚才松了些',
+        thread: '关于手背那道疤，还没问出口',
+      },
+      ts: now - 3 * HOUR,
+      updatedTs: now - 12 * 60 * 1000,
+      source: 'auto',
+    },
+  };
+
+  globalThis.SillyTavern = {
+    getContext: () => ({
+      extensionSettings: {
+        'memory-weave': {
+          chats: { 'test::demo': { cursor: 20, memories, snapshots, fillSig: '18,19' } },
+        },
+      },
+      chat,
+      characters: [{ avatar: 'test', name: '银' }],
+      characterId: 0,
+      name1: '我',
+      name2: '银',
+      getCurrentChatId: () => 'demo',
+      saveSettingsDebounced: () => {},
+      setExtensionPrompt: (k, v) => { window.__lastPrompt = v; },
+      generateRaw: async () => '',
+      eventSource: {
+        on: (evt, fn) => { if (evt === 'app_ready') setTimeout(fn, 0); },
+      },
+      eventTypes: { APP_READY: 'app_ready' },
+      isMobile: () => true,
+    }),
+  };
+</script>
+
+<script src="index.js"></script>
+
+<script>
+  // 支持 ?view=records|form|settings|template 直达某个界面
+  const view = new URLSearchParams(location.search).get('view');
+  setTimeout(() => {
+    const mw = globalThis.MemoryWeave;
+    if (!mw) return;
+    mw.open();
+    setTimeout(() => {
+      if (view === 'records' || view === 'settings' || view === 'templates') {
+        document.querySelector(`[data-tab="${view}"]`)?.click();
+      } else if (view === 'snap') {
+        document.querySelector('[data-tab="templates"]')?.click();
+        setTimeout(() => {
+          document.querySelector('[data-snap-edit="state"]')?.click();
+          setTimeout(() => {
+            const b = document.querySelector('.mw-form-body');
+            if (b) b.scrollTop = b.scrollHeight;
+          }, 450);
+        }, 150);
+      } else if (view === 'form') {
+        document.querySelector('[data-tab="records"]')?.click();
+        setTimeout(() => document.querySelector('[data-mw="new-record"]')?.click(), 120);
+      } else if (view === 'template') {
+        document.querySelector('[data-tab="settings"]')?.click();
+        setTimeout(() => mw.template(), 120);
+      } else if (view === 'expanded') {
+        setTimeout(() => document.querySelector('.mw-timeline .mw-card')?.click(), 200);
+      }
+    }, 160);
+  }, 500);
+</script>
+
+</body>
+</html>

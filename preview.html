@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>织忆 · Memory Weave — UI 预览</title>
+<style>
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+  }
+
+  body {
+    font-family: -apple-system, "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC",
+                 "Microsoft YaHei", system-ui, sans-serif;
+    color: #e8ecf6;
+    background:
+      radial-gradient(55% 45% at 50% -8%, rgba(92, 102, 220, 0.28) 0%, transparent 68%),
+      radial-gradient(45% 38% at 88% 96%, rgba(50, 180, 170, 0.14) 0%, transparent 70%),
+      #05070d;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 22px;
+    padding: 34px 20px 40px;
+    min-height: 100vh;
+  }
+
+  header {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .mark {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 21px;
+    letter-spacing: 0.2em;
+    font-weight: 600;
+  }
+
+  .mark i {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 32% 28%, #fff, #b9c0ff 26%, #6d76e8 58%, #2b2f63);
+    box-shadow: 0 0 16px rgba(139, 147, 255, 0.7);
+  }
+
+  .sub {
+    font-size: 11px;
+    letter-spacing: 0.28em;
+    color: rgba(232, 236, 246, 0.34);
+  }
+
+  .hints {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    max-width: 720px;
+  }
+
+  .hints span {
+    font-size: 11.5px;
+    line-height: 1.5;
+    padding: 6px 12px;
+    border-radius: 20px;
+    color: rgba(232, 236, 246, 0.6);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .switcher {
+    display: flex;
+    gap: 3px;
+    padding: 3px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.045);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .switcher button {
+    font-family: inherit;
+    font-size: 12px;
+    padding: 7px 16px;
+    border: 0;
+    border-radius: 9px;
+    color: rgba(232, 236, 246, 0.55);
+    background: none;
+    cursor: pointer;
+    transition: 0.22s;
+  }
+
+  .switcher button.on {
+    color: #0d1020;
+    font-weight: 600;
+    background: linear-gradient(180deg, #dfe3ff, #a9b0f0);
+    box-shadow: 0 4px 14px rgba(139, 147, 255, 0.3);
+  }
+
+  .stage {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .device {
+    position: relative;
+    width: 390px;
+    height: min(844px, calc(100vh - 250px));
+    min-height: 560px;
+    border-radius: 42px;
+    padding: 26px 9px 9px;
+    background: linear-gradient(160deg, #23262f, #0b0d12);
+    box-shadow:
+      0 40px 90px rgba(0, 0, 0, 0.72),
+      0 0 0 1px rgba(255, 255, 255, 0.07),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+    transition: width 0.45s cubic-bezier(0.22, 1, 0.36, 1),
+                height 0.45s cubic-bezier(0.22, 1, 0.36, 1),
+                border-radius 0.35s;
+    overflow: hidden;
+  }
+
+  .device.desktop {
+    width: min(1180px, calc(100vw - 40px));
+    height: min(820px, calc(100vh - 250px));
+    border-radius: 18px;
+    padding: 7px;
+  }
+
+  .device::before {
+    content: "";
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 84px;
+    height: 12px;
+    border-radius: 20px;
+    background: #05070c;
+    z-index: 2;
+    pointer-events: none;
+    transition: opacity 0.3s;
+  }
+
+  .device.desktop::before { opacity: 0; }
+
+  .device iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: 34px;
+    display: block;
+    background: #05070c;
+    transition: border-radius 0.35s;
+  }
+
+  .device.desktop iframe { border-radius: 12px; }
+
+  footer {
+    font-size: 11px;
+    color: rgba(232, 236, 246, 0.26);
+    text-align: center;
+    line-height: 1.7;
+    max-width: 560px;
+  }
+
+  @media (max-width: 640px) {
+    body { padding: 18px 10px 28px; gap: 14px; }
+    .device { border-radius: 26px; padding: 6px; }
+    .device iframe { border-radius: 21px; }
+    .mark { font-size: 17px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="mark"><i></i>织 忆</div>
+  <div class="sub">MEMORY WEAVE · SILLYTAVERN EXTENSION</div>
+</header>
+
+<div class="hints">
+  <span>切「模板」页 → 当前状态：每轮自动覆盖，只留最新一条</span>
+  <span>切「记录」页 → 新建记录，试试填表</span>
+  <span>点卡片可展开字段与操作</span>
+  <span>点 ✕ 关闭后，右下角光球可重新唤出</span>
+</div>
+
+<div class="switcher">
+  <button class="on" data-mode="phone">手机</button>
+  <button data-mode="desktop">桌面</button>
+</div>
+
+<div class="stage">
+  <div class="device" id="device">
+    <iframe id="frame" src="preview-app.html" title="织忆 UI 预览"></iframe>
+  </div>
+</div>
+
+<footer>
+  这是一份纯前端预览，数据是假的、不会保存。<br>
+  真正的扩展在 <code>memory-weave/</code> 目录，装进酒馆后走的是同一套代码。
+</footer>
+
+<script>
+  const device = document.getElementById('device');
+  document.querySelectorAll('[data-mode]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('[data-mode]').forEach(b => b.classList.toggle('on', b === btn));
+      device.classList.toggle('desktop', btn.dataset.mode === 'desktop');
+    });
+  });
+
+  // 把 ?view= 透传给内层
+  const qs = location.search;
+  if (qs) document.getElementById('frame').src = 'preview-app.html' + qs;
+</script>
+
+</body>
+</html>

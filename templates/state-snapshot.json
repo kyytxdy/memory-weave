@@ -1,0 +1,51 @@
+{
+  "name": "当前状态",
+  "version": 1,
+  "singleton": true,
+  "autofill": true,
+  "description": "快照型模板。singleton=true 表示只保留最新一条，每次保存覆盖；autofill=true 表示每轮对话结束后自动从「上一轮」提取并覆盖。字段越少越准，建议 main 组不超过 4 个。",
+  "fields": [
+    {
+      "id": "scene",
+      "label": "场景",
+      "type": "text",
+      "group": "main",
+      "placeholder": "此刻在哪、什么氛围"
+    },
+    {
+      "id": "present",
+      "label": "在场的人",
+      "type": "text",
+      "group": "main",
+      "placeholder": "谁在场"
+    },
+    {
+      "id": "me",
+      "label": "我的处境",
+      "type": "textarea",
+      "group": "main",
+      "placeholder": "我正在做什么、什么状态"
+    },
+    {
+      "id": "other",
+      "label": "对方的状态",
+      "type": "textarea",
+      "group": "extra",
+      "placeholder": "情绪、态度、小动作"
+    },
+    {
+      "id": "thread",
+      "label": "进行中的事",
+      "type": "textarea",
+      "group": "extra",
+      "placeholder": "还没了结的线索"
+    },
+    {
+      "id": "note",
+      "label": "备注",
+      "type": "text",
+      "group": "extra",
+      "placeholder": "其它值得留意的"
+    }
+  ]
+}
