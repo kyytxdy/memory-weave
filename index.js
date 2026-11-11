@@ -433,6 +433,9 @@ function tooSimilar(summary, source) {
 function isUsableSummary(t) {
     if (!t || t.length < 6) return false;
     if (/^(我无法|抱歉|作为(一个)?(AI|语言模型)|我不能)/.test(t)) return false;
+    // 模型在解释「这里没东西可写」，不是总结
+    if (/(没有|无)(可压缩|可总结|实质|足够)(的)?(内容|情节|信息)/.test(t)) return false;
+    if (/^(对话|内容)(里)?(没有|无)/.test(t)) return false;
     return true;
 }
 
@@ -790,7 +793,7 @@ function parsePeople(raw, tpl) {
     const out = [];
 
     for (const block of String(raw).split(/(?=【)/)) {
-        const head = block.match(/^【\s*([^】]{1,20})\s*】\s*(?:重要度\s*[:：]\s*([1-5]))?/);
+        const head = block.match(/^[【\[（(]\s*([^】\]）)\n]{1,20})\s*[】\]）)]\s*(?:重要度\s*[:：]\s*([1-5]))?/);
         if (!head) continue;
 
         const name = head[1].replace(/[「」“”"'']/g, '').trim();
@@ -816,12 +819,12 @@ function parsePeople(raw, tpl) {
     return out;
 }
 
-async function autoUpdatePeople(retry = 3) {
+async function autoUpdatePeople(retry = 6) {
     if (!ready || !S.enabled || !S.autoFillSnapshots) return;
 
     // 总结那边正在跑就排队等，不能直接丢弃
     if (filling || weaving) {
-        if (retry > 0) setTimeout(() => autoUpdatePeople(retry - 1), 6000);
+        if (retry > 0) setTimeout(() => autoUpdatePeople(retry - 1), 8000);
         return;
     }
 
@@ -1001,6 +1004,8 @@ async function autoTick() {
         weaving = false;
         setBusyState(false);
         updateStats();
+        // 总结占着锁的时候人物提取进不来，这里主动接力
+        setTimeout(() => autoUpdatePeople(), 800);
     }
 }
 
