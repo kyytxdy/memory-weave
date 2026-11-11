@@ -10,6 +10,8 @@
 
 'use strict';
 
+console.log('[织忆] ① 脚本开始执行');
+
 /* =========================================================
  * 常量
  * ========================================================= */
@@ -588,35 +590,6 @@ async function generateArc() {
     pushCapped('arcs', arc);
     return arc;
 }/** 通用模型调用：三条通道依次降级，任何一条通了就用 */
-async function aiCall(prompt, responseLength = 500, quietName = 'memory') {
-    if (typeof ctx.generateRaw === 'function') {
-        try {
-            const out = await ctx.generateRaw({ prompt, responseLength, trimNames: false });
-            if (out && String(out).trim()) return String(out);
-        } catch (e) {
-            console.warn('[织忆] generateRaw 不可用，尝试下一通道', e);
-        }
-    }
-
-    if (typeof ctx.generateQuietPrompt === 'function') {
-        try {
-            const out = await ctx.generateQuietPrompt({
-                quietPrompt: prompt, responseLength, quietName,
-            });
-            if (out && String(out).trim()) return String(out);
-        } catch (e) {
-            console.warn('[织忆] generateQuietPrompt(对象) 不可用，尝试旧签名', e);
-        }
-        try {
-            const out = await ctx.generateQuietPrompt(prompt, false, true, quietName, responseLength);
-            if (out && String(out).trim()) return String(out);
-        } catch (e) {
-            console.warn('[织忆] generateQuietPrompt(位置参数) 不可用', e);
-        }
-    }
-
-    return '';
-}
 
 /* =========================================================
  * 快照自动填充：只读上一轮对话，覆盖式更新
@@ -2824,8 +2797,12 @@ function onReady() {
  * ========================================================= */
 
 async function init() {
+    console.log('[织忆] ② init 开始');
     await ensureContext();
+    console.log('[织忆] ③ 上下文就绪，keys =', Object.keys(ctx || {}).length);
+
     loadSettings();
+    console.log('[织忆] ④ 设置已载入');
 
     try {
         bindEvents();
@@ -2833,7 +2810,10 @@ async function init() {
         console.warn('[织忆] 事件绑定整体失败，继续初始化', e);
     }
 
-    setTimeout(() => { if (!ready) onReady(); }, 2000);
+    setTimeout(() => {
+        console.log('[织忆] ⑤ 兜底检查，ready =', ready);
+        if (!ready) onReady();
+    }, 2000);
 
     globalThis.MemoryWeave = {
         open: openPanel,
@@ -2867,4 +2847,5 @@ async function init() {
     };
 }
 
+console.log('[织忆] ⑥ 准备调用 init');
 init().catch(e => console.error('[织忆] 初始化失败', e));
