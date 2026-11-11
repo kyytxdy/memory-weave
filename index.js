@@ -555,6 +555,7 @@ function buildBeatPrompt(transcript) {
         '- 直接输出那一句话。不要引号、不要标题、不要分点。',
         '- 绝对不要复述原文，不要输出「这是……」「以下是……」这类说明。',
         '- 第一个字就是总结本身。',
+        '- 不需要思考过程。想清楚了直接写那一句话。',
         '',
         '对话：',
         transcript,
@@ -581,7 +582,14 @@ function buildArcPrompt(beats) {
 async function aiCall(prompt, responseLength = 500, quietName = 'memory') {
     if (typeof ctx.generateRaw === 'function') {
         try {
-            const out = await ctx.generateRaw({ prompt, responseLength, trimNames: false });
+            // 摘要任务不需要深度推理，顺手把 reasoning 压低；不支持时会静默忽略
+            const out = await ctx.generateRaw({
+                prompt,
+                responseLength,
+                trimNames: false,
+                reasoning_effort: 'low',
+                jsonSchema: undefined,
+            });
             const clean = stripThinking(out);
             if (clean) return clean;
         } catch (e) {
