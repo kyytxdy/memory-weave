@@ -212,6 +212,7 @@ function store() {
     if (!Array.isArray(node.arcs)) node.arcs = [];
     if (!Array.isArray(node.memos)) node.memos = [];
     if (typeof node.cursor !== 'number') node.cursor = 0;
+    if (typeof node.inited !== 'boolean') node.inited = false;
     if (typeof node.beatMark !== 'number') node.beatMark = 0;   // 已总结到的 assistant 条数
     if (typeof node.arcMark !== 'number') node.arcMark = 0;
     if (!node.snapshots || typeof node.snapshots !== 'object') node.snapshots = {};
@@ -668,6 +669,21 @@ async function autoFillSnapshots() {
 /* =========================================================
  * 自动总结调度
  * ========================================================= */
+
+/**
+ * 首次接入某个聊天时，把游标对齐到当前轮次。
+ * 否则一装好就欠着全部历史，点「补全部」会跑几十上百次模型调用。
+ */
+function initChatCursor() {
+    const node = store();
+    if (node.inited) return;
+    node.inited = true;
+    if (node.beatMark === 0 && assistantTotal() > 0) {
+        node.beatMark = assistantTotal();
+        node.arcMark = node.beatMark;
+    }
+    persist();
+}
 
 function pendingRounds() {
     return Math.max(0, assistantTotal() - store().beatMark);
@@ -2243,6 +2259,7 @@ function scheduleFill() {
 }
 
 function onChatChanged() {
+    initChatCursor();
     refreshInjection();
     if (ui.app?.classList.contains('mw-open')) refreshAll();
 }
@@ -2275,6 +2292,7 @@ function bindEvents() {
 function onReady() {
     if (ready) return;
     ready = true;
+    initChatCursor();
 
     buildUI();
     if (S.showFab) mountFab();
