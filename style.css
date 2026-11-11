@@ -45,7 +45,9 @@
     box-sizing: border-box;
 }
 
-#mw-app button {
+/* :where() 把优先级降到 0，任何 class 规则都能覆盖这个重置，
+   否则 #mw-app button 会压掉 .mw-chipbtn / .mw-link 的底色和边框 */
+:where(#mw-app button) {
     font-family: inherit;
     color: inherit;
     border: 0;
@@ -1444,6 +1446,150 @@ body.mw-locked {
     font-size: 11px;
     color: var(--mw-faint);
     font-variant-numeric: tabular-nums;
+}
+
+/* =========================================================
+ * 人物列表（一人一栏，可展开）
+ * ========================================================= */
+
+.mw-tpl-card.is-entity {
+    border-color: rgba(255, 204, 122, 0.16);
+    background: linear-gradient(158deg, rgba(255, 204, 122, 0.045), rgba(255, 255, 255, 0.015));
+}
+
+.mw-person-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.mw-person {
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    overflow: hidden;
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.mw-person.open {
+    background: rgba(255, 255, 255, 0.055);
+    border-color: rgba(139, 147, 255, 0.22);
+}
+
+.mw-person-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 9px 11px;
+    text-align: left;
+}
+
+.mw-person-head:active {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.mw-person-dot {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.2);
+    transition: 0.25s;
+}
+
+.mw-person-dot.lv5 { background: #ffd166; box-shadow: 0 0 9px rgba(255, 209, 102, 0.85); }
+.mw-person-dot.lv4 { background: #b3b9ff; box-shadow: 0 0 8px rgba(179, 185, 255, 0.7); }
+.mw-person-dot.lv3 { background: rgba(139, 147, 255, 0.6); box-shadow: 0 0 6px rgba(139, 147, 255, 0.42); }
+.mw-person-dot.lv2 { background: rgba(255, 255, 255, 0.26); }
+.mw-person-dot.lv1 { background: rgba(255, 255, 255, 0.15); }
+
+.mw-person-name {
+    flex: 0 0 auto;
+    max-width: 42%;
+    font-size: 13.5px;
+    font-weight: 500;
+    color: #fff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mw-person-brief {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--mw-faint);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mw-person-arrow {
+    flex: 0 0 auto;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--mw-faint);
+    transition: transform 0.25s, color 0.25s;
+}
+
+.mw-person.open .mw-person-arrow {
+    transform: rotate(90deg);
+    color: var(--mw-accent);
+}
+
+.mw-person-body {
+    display: none;
+    padding: 9px 11px 11px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.mw-person.open .mw-person-body {
+    display: block;
+    animation: mw-rise 0.26s ease both;
+}
+
+.mw-person-empty {
+    padding: 4px 0;
+    font-size: 11.5px;
+    color: var(--mw-faint);
+}
+
+.mw-person-foot {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 9px;
+    padding-top: 8px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.07);
+    font-size: 10.5px;
+    color: var(--mw-faint);
+}
+
+.mw-person-foot .mw-snap-time {
+    margin-right: auto;
+}
+
+.mw-person-foot .mw-link {
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 8px;
+    color: #bfc5ff;
+    background: rgba(139, 147, 255, 0.12);
+    border: 1px solid rgba(139, 147, 255, 0.2);
+    transition: 0.2s;
+}
+
+.mw-person-foot .mw-link:active {
+    transform: scale(0.95);
+    background: rgba(139, 147, 255, 0.2);
+}
+
+.mw-person-foot .mw-link.danger {
+    color: #ff9aa8;
+    background: rgba(255, 107, 129, 0.1);
+    border-color: rgba(255, 107, 129, 0.2);
 }
 
 /* =========================================================

@@ -30,7 +30,9 @@ const DEFAULT_SETTINGS = {
     enabled: true,
     autoSummarize: true,      // 时间线：逐轮自动总结
     autoArc: true,            // 记录：每 N 轮自动大总结
-    autoFillSnapshots: true,
+    autoFillSnapshots: true,  // 每轮更新人物档案
+    personTTL: 10,            // 超过这么多轮没出现就移除
+    personMinImportance: 3,   // 低于这个重要度的新人物不建档
     useAI: true,
     beatEvery: 1,             // 每几轮生成一条短总结
     arcEvery: 10,             // 每几轮生成一条大总结
@@ -76,19 +78,37 @@ const GENERAL_TEMPLATE = {
 };
 
 /*
- * 快照型模板：singleton = 只保留最新一条，每次保存覆盖旧值
- * autofill = 每轮对话结束后由模型从「上一轮」提取，自动覆盖
- *
- * 字段设计参考 Memory Books 的 Side Prompts / Trackers：
- * 只收「对话里能直接观察到的东西」，不收需要推断的结论。
- * 收推断 = 模型编造 = 记忆污染。
+ * 实体型模板：一个人物一张卡。
+ * entity = true 表示按 keyField 的值分卡，同名的合并覆盖。
+ * autofill = 每轮从上一轮对话里找人、填字段、更新最后出现轮次。
+ */
+const PERSON_TEMPLATE = {
+    id: 'person',
+    name: '人物档案',
+    builtin: true,
+    entity: true,
+    keyField: 'name',
+    autofill: true,
+    fields: [
+        { id: 'name', label: '姓名', type: 'text', group: 'main', required: true },
+        { id: 'role', label: '身份', type: 'text', group: 'main', placeholder: '药房主人 / 护卫 / 学徒' },
+        { id: 'relation', label: '与我的关系', type: 'text', group: 'main', placeholder: '收留我的人 / 债主 / 宿敌' },
+        { id: 'attitude', label: '对我的态度', type: 'text', group: 'main', placeholder: '戒备 / 温和 / 试探' },
+        { id: 'look', label: '外貌特征', type: 'text', group: 'extra', placeholder: '一眼能认出的特征' },
+        { id: 'speech', label: '说话方式', type: 'text', group: 'extra', placeholder: '口癖、语气' },
+        { id: 'lastEvent', label: '最近互动', type: 'textarea', group: 'extra', placeholder: '这一轮和他发生了什么' },
+    ],
+};
+
+/*
+ * 快照型模板：singleton 只保留最新一条，覆盖式更新
  */
 const STATE_TEMPLATE = {
     id: 'state',
     name: '当前状态',
     builtin: true,
     singleton: true,
-    autofill: true,
+    autofill: false,
     fields: [
         { id: 'scene', label: '场景', type: 'text', group: 'main', placeholder: '在哪、什么时辰、什么天气' },
         { id: 'present', label: '在场', type: 'text', group: 'main', placeholder: '在场的人' },
@@ -114,6 +134,7 @@ let fabDrag = null;
 let editingRecordId = null;
 let editingTemplateId = null;
 let editingSnapshotTpl = null;
+let editingEntity = null;      // { tplId, key }
 let draftTemplate = null;
 
 /* =========================================================
@@ -158,9 +179,13 @@ function persist() {
  * ========================================================= */
 
 function getTemplates() {
-    const base = [GENERAL_TEMPLATE, STATE_TEMPLATE, ...S.templates];
+    const base = [PERSON_TEMPLATE, GENERAL_TEMPLATE, STATE_TEMPLATE, ...S.templates];
     const flags = S.tplFlags || {};
     return base.map(t => (flags[t.id] ? { ...t, ...flags[t.id] } : t));
+}
+
+function entityTemplates() {
+    return getTemplates().filter(t => t.entity && t.autofill);
 }
 
 function getTemplate(id) {
@@ -216,8 +241,82 @@ function store() {
     if (typeof node.beatMark !== 'number') node.beatMark = 0;   // 已总结到的 assistant 条数
     if (typeof node.arcMark !== 'number') node.arcMark = 0;
     if (!node.snapshots || typeof node.snapshots !== 'object') node.snapshots = {};
+    if (!node.entities || typeof node.entities !== 'object') node.entities = {};
     if (typeof node.fillSig !== 'string') node.fillSig = '';
     return node;
+}
+
+/* ---------- 实体卡（一个人物一张） ---------- */
+
+function entityPool(tplId) {
+    const node = store();
+    if (!node.entities[tplId] || typeof node.entities[tplId] !== 'object') {
+        node.entities[tplId] = {};
+    }
+    return node.entities[tplId];
+}
+
+function listEntities(tplId) {
+    return Object.values(entityPool(tplId))
+        .sort((a, b) => (b.importance - a.importance) || (b.updatedTs - a.updatedTs));
+}
+
+function getEntity(tplId, key) {
+    return entityPool(tplId)[key] || null;
+}
+
+function upsertEntity(tplId, key, values, importance, round) {
+    const pool = entityPool(tplId);
+    const prev = pool[key];
+    const now = Date.now();
+
+    // 空字段不覆盖旧值，模型这轮没提到不代表信息失效
+    const merged = { ...(prev?.values || {}) };
+    for (const [k, v] of Object.entries(values || {})) {
+        if (v && String(v).trim()) merged[k] = String(v).trim().slice(0, 200);
+    }
+
+    pool[key] = {
+        kind: 'entity',
+        id: prev?.id || uid('e'),
+        templateId: tplId,
+        key,
+        values: merged,
+        importance: Math.max(Number(importance) || 0, prev?.importance || 0),
+        ts: prev?.ts || now,
+        updatedTs: now,
+        lastRound: round,
+        source: 'auto',
+    };
+    persist();
+    return pool[key];
+}
+
+function dropEntity(tplId, key) {
+    const pool = entityPool(tplId);
+    if (!pool[key]) return;
+    delete pool[key];
+    persist();
+}
+
+/** 超过 N 轮没出现的人物自动移除 */
+function pruneEntities() {
+    const total = assistantTotal();
+    const ttl = Math.max(1, Number(S.personTTL) || 10);
+    let removed = 0;
+
+    for (const tpl of getTemplates().filter(t => t.entity)) {
+        const pool = entityPool(tpl.id);
+        for (const [key, e] of Object.entries(pool)) {
+            const last = Number(e.lastRound) || 0;
+            if (total - last > ttl) {
+                delete pool[key];
+                removed++;
+            }
+        }
+    }
+    if (removed) persist();
+    return removed;
 }
 
 /* ---------- 快照（模板只存最新一条，覆盖式） ---------- */
@@ -616,16 +715,79 @@ function parseFilled(tpl, raw) {
     return values;
 }
 
-async function autoFillSnapshots() {
+/* =========================================================
+ * 人物档案：每轮找人、填字段、清掉久未出现的
+ * ========================================================= */
+
+function buildPersonPrompt(transcript, tpl) {
+    const labels = tpl.fields.filter(f => f.id !== tpl.keyField).map(f => f.label);
+    return [
+        '下面是一段角色扮演对话。请找出这段对话里出现的人物，为每个人物填写档案。',
+        '',
+        '输出格式（严格遵守，不要输出解释、不要代码块）：',
+        '【人物名】重要度:1-5',
+        `随后每行一条字段，格式为「字段名：内容」。可用字段：${labels.join('、')}`,
+        '每个人物一段，段与段之间空一行。同一个人物只输出一次。',
+        '',
+        '重要度标准：',
+        '5 = 主角或贯穿剧情的核心角色',
+        '4 = 有名字、有独立台词、之后大概率还会出现',
+        '3 = 有名字、有明确互动',
+        '2 = 只被顺口提到一次',
+        '1 = 背景路人',
+        `重要度低于 ${S.personMinImportance} 的人物直接不输出。`,
+        '',
+        '规则：',
+        '- 只写对话里明确出现的信息。没写的字段整行省略，不要写「未知」「无」「未提及」。',
+        '- 不要编造外貌、身份、身世。没提到就空着。',
+        '- 人称指代不明时宁可不写，也不要猜。',
+        '',
+        '对话：',
+        transcript,
+    ].join('\n');
+}
+
+function parsePeople(raw, tpl) {
+    const labelToId = new Map(tpl.fields.map(f => [f.label, f.id]));
+    const keyId = tpl.keyField || 'name';
+    const out = [];
+
+    for (const block of String(raw).split(/(?=【)/)) {
+        const head = block.match(/^【\s*([^】]{1,20})\s*】\s*(?:重要度\s*[:：]\s*([1-5]))?/);
+        if (!head) continue;
+
+        const name = head[1].replace(/[「」“”"'']/g, '').trim();
+        if (!name) continue;
+
+        const values = { [keyId]: name };
+
+        for (const line of block.split(/\r?\n/).slice(1)) {
+            const m = line.trim().match(/^[-*•\s]*([^：:]{1,12})\s*[：:]\s*(.+)$/);
+            if (!m) continue;
+
+            const fid = labelToId.get(m[1].trim());
+            if (!fid || fid === keyId) continue;
+
+            const val = m[2].trim().slice(0, 200);
+            if (!val || /^(无|未知|未提及|不明|不详|n\/a|none|-|—)$/i.test(val)) continue;
+            values[fid] = val;
+        }
+
+        out.push({ name, importance: Number(head[2]) || 3, values });
+    }
+    return out;
+}
+
+async function autoUpdatePeople() {
     if (!ready || filling || weaving || !S.enabled || !S.autoFillSnapshots) return;
 
-    const tpls = snapshotTemplates().filter(t => t.autofill);
+    const tpls = entityTemplates();
     if (!tpls.length) return;
 
     const round = lastRoundMessages();
     if (!round.length) return;
 
-    // 同一轮不重复跑；对话继续推进才会再次触发
+    // 同一轮不重复跑
     const sig = round.map(r => r.index).join(',');
     const node = store();
     if (node.fillSig === sig) return;
@@ -635,28 +797,29 @@ async function autoFillSnapshots() {
     filling = true;
     try {
         const transcript = round
-            .map(r => `${speakerOf(r.msg)}：${String(r.msg.mes).trim().slice(0, 500)}`)
+            .map(r => `${speakerOf(r.msg)}：${String(r.msg.mes).trim().slice(0, 600)}`)
             .join('\n');
+        const roundNo = assistantTotal();
 
-        let touched = 0;
         for (const tpl of tpls) {
             try {
-                const raw = await aiCall(buildFillPrompt(tpl, transcript), 400, 'memory-state');
+                const raw = await aiCall(buildPersonPrompt(transcript, tpl), 900, 'memory-person');
                 if (!raw) continue;
-                const values = parseFilled(tpl, raw);
-                if (hasAnyValue(values)) {
-                    saveSnapshot(tpl.id, values, { source: 'auto' });
-                    touched++;
+
+                const people = parsePeople(raw, tpl);
+                for (const p of people) {
+                    if (p.importance < S.personMinImportance) continue;
+                    upsertEntity(tpl.id, p.name, p.values, p.importance, roundNo);
                 }
             } catch (e) {
-                console.warn('[织忆] 快照填充失败：' + tpl.name, e);
+                console.warn('[织忆] 人物提取失败', tpl.name, e);
             }
         }
 
-        if (touched) {
-            refreshAll();
-            refreshInjection();
-        }
+        const removed = pruneEntities();
+        refreshAll();
+        refreshInjection();
+        if (removed) console.log(`[织忆] 移除 ${removed} 个超过 ${S.personTTL} 轮未出现的人物`);
     } finally {
         filling = false;
     }
@@ -991,7 +1154,7 @@ function buildUI() {
                 <label class="mw-switch"><input type="checkbox" data-opt="autoArc"><i></i></label>
               </div>
               <div class="mw-row">
-                <div class="mw-row-main"><b>自动更新快照</b><small>每轮结束按模板重填一次，覆盖旧值</small></div>
+                <div class="mw-row-main"><b>自动建档人物</b><small>每轮从对话里找人，判定重要度后建档</small></div>
                 <label class="mw-switch"><input type="checkbox" data-opt="autoFillSnapshots"><i></i></label>
               </div>
               <div class="mw-row">
@@ -1016,6 +1179,14 @@ function buildUI() {
               <div class="mw-row mw-row-col">
                 <div class="mw-row-main"><b>注入条数</b><small>带 <span data-mw="val-inject">6</span> 条短总结进上下文</small></div>
                 <input type="range" min="2" max="20" step="1" data-opt="injectBeats">
+              </div>
+              <div class="mw-row mw-row-col">
+                <div class="mw-row-main"><b>人物保留</b><small>超过 <span data-mw="val-ttl">10</span> 轮没出现就移除</small></div>
+                <input type="range" min="3" max="40" step="1" data-opt="personTTL">
+              </div>
+              <div class="mw-row mw-row-col">
+                <div class="mw-row-main"><b>建档门槛</b><small>重要度 ≥ <span data-mw="val-imp">3</span> 才建表，5 最难</small></div>
+                <input type="range" min="1" max="5" step="1" data-opt="personMinImportance">
               </div>
               <div class="mw-row">
                 <div class="mw-row-main"><b>记忆风格</b><small>影响提炼时的语气</small></div>
@@ -1075,6 +1246,44 @@ function bindPanelEvents(app) {
         if (ev.target.closest('[data-mw="new-record"]')) { openForm(); return; }
         if (ev.target.closest('[data-mw="new-tpl"]')) { createTemplate(); return; }
         if (ev.target.closest('[data-mw="import-tpl"]')) { importTemplate(); return; }
+
+        const personHead = ev.target.closest('[data-person-toggle]');
+        if (personHead) {
+            const row = personHead.closest('.mw-person');
+            const tk = row?.dataset.tk;
+            if (tk) {
+                const open = row.classList.toggle('open');
+                if (open) openPeople.add(tk);
+                else openPeople.delete(tk);
+            }
+            return;
+        }
+
+        const personEdit = ev.target.closest('[data-person-edit]');
+        if (personEdit) { openPersonForm(personEdit.dataset.tpl, personEdit.dataset.key); return; }
+
+        const personDel = ev.target.closest('[data-person-del]');
+        if (personDel) {
+            const { tpl, key } = personDel.dataset;
+            const pool = entityPool(tpl);
+            const saved = pool[key];
+            dropEntity(tpl, key);
+            openPeople.delete(`${tpl}::${key}`);
+            refreshAll();
+            refreshInjection();
+            showUndoToast('已移除', () => {
+                if (saved) {
+                    pool[key] = saved;
+                    persist();
+                    refreshAll();
+                    refreshInjection();
+                }
+            });
+            return;
+        }
+
+        const personAdd = ev.target.closest('[data-person-add]');
+        if (personAdd) { openPersonForm(personAdd.dataset.personAdd, null); return; }
 
         const snapEdit = ev.target.closest('[data-snap-edit]');
         if (snapEdit) { openSnapshotForm(snapEdit.dataset.snapEdit); return; }
@@ -1180,9 +1389,13 @@ function syncSettingsUI() {
     const vb = el('[data-mw="val-beat"]');
     const va = el('[data-mw="val-arc"]');
     const vi = el('[data-mw="val-inject"]');
+    const vt = el('[data-mw="val-ttl"]');
+    const vimp = el('[data-mw="val-imp"]');
     if (vb) vb.textContent = S.beatEvery;
     if (va) va.textContent = S.arcEvery;
     if (vi) vi.textContent = S.injectBeats;
+    if (vt) vt.textContent = S.personTTL;
+    if (vimp) vimp.textContent = S.personMinImportance;
 }
 
 function applyOption(input, isRange = false) {
@@ -1194,6 +1407,8 @@ function applyOption(input, isRange = false) {
     if (key === 'beatEvery') el('[data-mw="val-beat"]').textContent = S.beatEvery;
     if (key === 'arcEvery') el('[data-mw="val-arc"]').textContent = S.arcEvery;
     if (key === 'injectBeats') el('[data-mw="val-inject"]').textContent = S.injectBeats;
+    if (key === 'personTTL') el('[data-mw="val-ttl"]').textContent = S.personTTL;
+    if (key === 'personMinImportance') el('[data-mw="val-imp"]').textContent = S.personMinImportance;
     if (key === 'showFab') toggleFab(S.showFab);
     if (key === 'enabled') refreshInjection();
 
@@ -1689,6 +1904,7 @@ function closeDrawer() {
     editingRecordId = null;
     editingTemplateId = null;
     editingSnapshotTpl = null;
+    editingEntity = null;
     draftTemplate = null;
 }
 
@@ -1746,7 +1962,7 @@ function openForm(recordId = null) {
     editingSnapshotTpl = null;
 
     const tplId = rec?.templateId || GENERAL_TEMPLATE.id;
-    renderFormShell(rec, tplId, false);
+    renderFormShell(rec, tplId, 'record');
     openDrawer();
 }
 
@@ -1758,32 +1974,52 @@ function openSnapshotForm(tplId) {
 
     editingRecordId = null;
     editingSnapshotTpl = tplId;
-    renderFormShell(getSnapshot(tplId), tplId, true);
+    editingEntity = null;
+    renderFormShell(getSnapshot(tplId), tplId, 'snapshot');
     openDrawer();
 }
 
-function renderFormShell(rec, tplId, isSnapshot = false) {
+/** 打开人物表单：key 存在则编辑，否则新建 */
+function openPersonForm(tplId, key) {
+    if (!ui.app) buildUI();
+    if (!ui.app.classList.contains('mw-open')) openPanel();
+    ensureDrawer();
+
+    editingRecordId = null;
+    editingSnapshotTpl = null;
+    editingEntity = { tplId, key: key || null };
+
+    renderFormShell(key ? getEntity(tplId, key) : null, tplId, 'entity');
+    openDrawer();
+}
+
+function renderFormShell(rec, tplId, mode = 'record') {
     const d = el('#mw-drawer');
     const tpl = getTemplate(tplId);
+    const isSnapshot = mode === 'snapshot';
+    const isEntity = mode === 'entity';
 
-    const headTitle = isSnapshot
-        ? (rec ? '修改快照' : '填写快照')
-        : (rec ? '编辑记录' : '新建记录');
+    const headTitle = isEntity
+        ? (rec ? '编辑人物' : '新建人物')
+        : isSnapshot
+            ? (rec ? '修改快照' : '填写快照')
+            : (rec ? '编辑记录' : '新建记录');
 
     el('[data-dr="title"]', d).innerHTML = `${headTitle}<small>${esc(tpl.name)}</small>`;
 
-    el('[data-dr="tplbar"]', d).innerHTML = (rec || isSnapshot)
+    el('[data-dr="tplbar"]', d).innerHTML = (rec || isSnapshot || isEntity)
         ? `${isSnapshot ? `<span class="mw-snapbar">最后更新 ${rec ? minuteLabel(rec.updatedTs) : '—'}</span>` : ''}
+           ${isEntity && rec ? `<span class="mw-snapbar">上次出现 第 ${rec.lastRound || '?'} 轮</span>` : ''}
            <button data-dr="tpledit">编辑模板</button>`
         : `
       <select data-dr="tplsel">
-        ${getTemplates().filter(t => !t.singleton).map(t => `<option value="${t.id}"${t.id === tplId ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}
+        ${getTemplates().filter(t => !t.singleton && !t.entity).map(t => `<option value="${t.id}"${t.id === tplId ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}
       </select>
       <button data-dr="tpledit">编辑模板</button>`;
 
     const tplSel = el('[data-dr="tplsel"]', d);
     if (tplSel) {
-        tplSel.onchange = () => renderFormShell(null, tplSel.value, false);
+        tplSel.onchange = () => renderFormShell(null, tplSel.value, 'record');
     }
     const tplEditBtn = el('[data-dr="tpledit"]', d);
     if (tplEditBtn) {
@@ -1813,6 +2049,15 @@ function renderFormShell(rec, tplId, isSnapshot = false) {
       </div>`}
     `;
     body.scrollTop = 0;
+
+    // 编辑人物时锁住名字，避免改名产生重复卡
+    if (isEntity && rec) {
+        const keyInput = el(`[data-fid="${tpl.keyField}"]`, d);
+        if (keyInput) {
+            keyInput.readOnly = true;
+            keyInput.style.opacity = '0.55';
+        }
+    }
 
     // 有已填内容的额外字段自动展开
     if (extraFields.some(f => values[f.id])) {
@@ -1862,6 +2107,27 @@ function saveRecord() {
         refreshAll();
         closeDrawer();
         toast('快照已更新');
+        return;
+    }
+
+    // 人物分支
+    if (editingEntity) {
+        const tpl = getTemplate(editingEntity.tplId);
+        const { values, tags, tagFieldId } = collectValues();
+        if (tagFieldId) values[tagFieldId] = tags;
+
+        const keyId = tpl.keyField || 'name';
+        const name = String(values[keyId] || '').trim();
+        if (!name) { toast('名字不能为空'); return; }
+
+        const rating = el('[data-dr="rating"]', d);
+        const imp = Number(rating?.dataset.value || 3);
+
+        upsertEntity(editingEntity.tplId, name, values, imp, assistantTotal());
+        refreshInjection();
+        refreshAll();
+        closeDrawer();
+        toast('已保存');
         return;
     }
 
@@ -2013,60 +2279,136 @@ function minuteLabel(ts) {
     return sameDay ? `${hh}:${mm}` : `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`;
 }
 
+/* 展开状态跨重绘保留 */
+const openPeople = new Set();
+
+function personRowHTML(t, p) {
+    const keyId = t.keyField || 'name';
+    const name = p.values?.[keyId] || p.key;
+    const brief = [p.values?.role, p.values?.relation].filter(Boolean).join(' · ');
+
+    const detail = t.fields
+        .filter(f => f.id !== keyId)
+        .map(f => {
+            const v = p.values?.[f.id];
+            return v ? `<div><dt>${esc(f.label)}</dt><dd>${esc(String(v))}</dd></div>` : '';
+        })
+        .filter(Boolean)
+        .join('');
+
+    const tk = `${t.id}::${p.key}`;
+    const open = openPeople.has(tk);
+
+    return `
+      <div class="mw-person ${open ? 'open' : ''}" data-tk="${esc(tk)}">
+        <button class="mw-person-head" data-person-toggle>
+          <span class="mw-person-dot lv${p.importance}"></span>
+          <span class="mw-person-name">${esc(name)}</span>
+          <span class="mw-person-brief">${esc(brief)}</span>
+          <span class="mw-person-arrow">›</span>
+        </button>
+        <div class="mw-person-body">
+          ${detail
+            ? `<dl class="mw-snap-fields">${detail}</dl>`
+            : `<div class="mw-person-empty">档案还是空的</div>`}
+          <div class="mw-person-foot">
+            <span class="mw-snap-time">更新于 ${minuteLabel(p.updatedTs)}</span>
+            <button class="mw-link" data-person-edit data-tpl="${esc(t.id)}" data-key="${esc(p.key)}">修改</button>
+            <button class="mw-link danger" data-person-del data-tpl="${esc(t.id)}" data-key="${esc(p.key)}">移除</button>
+          </div>
+        </div>
+      </div>`;
+}
+
+function entityCardHTML(t) {
+    const people = listEntities(t.id);
+    const ttl = Math.max(1, Number(S.personTTL) || 10);
+
+    return `
+      <div class="mw-tpl-card is-entity">
+        <div class="mw-tpl-head">
+          <div class="mw-tpl-name">
+            <b>${esc(t.name)}</b>
+            ${t.builtin ? '<span class="mw-tag-mini">内置</span>' : ''}
+            <span class="mw-tag-mini snap">按人</span>
+          </div>
+          <div class="mw-tpl-btns">
+            <button class="mw-chipbtn ${t.autofill ? 'on' : ''}" data-tpl-toggle="${t.id}" data-flag="autofill">${t.autofill ? '自动建档' : '仅手动'}</button>
+            <button class="mw-chipbtn" data-person-add="${t.id}">＋</button>
+          </div>
+        </div>
+        <div class="mw-tpl-sub">${people.length} 人 · ${ttl} 轮未出现自动移除</div>
+        ${people.length
+            ? `<div class="mw-person-list">${people.map(p => personRowHTML(t, p)).join('')}</div>`
+            : `<div class="mw-snap-empty">还没有人物 —— 聊几轮会自动建档</div>`}
+      </div>`;
+}
+
+function snapshotCardHTML(t) {
+    const snap = getSnapshot(t.id);
+    let body = '';
+
+    if (snap && hasAnyValue(snap.values)) {
+        const rows = t.fields
+            .map(f => {
+                const v = snap.values?.[f.id];
+                const str = Array.isArray(v) ? v.join('、') : v;
+                return str ? `<div><dt>${esc(f.label)}</dt><dd>${esc(String(str))}</dd></div>` : '';
+            })
+            .filter(Boolean)
+            .join('');
+
+        body = `
+          <div class="mw-snap-meta">
+            <span class="mw-snap-time">更新于 ${minuteLabel(snap.updatedTs)}</span>
+            <span class="mw-snap-src ${snap.source === 'auto' ? 'auto' : ''}">${snap.source === 'auto' ? '自动' : '手动'}</span>
+            <button class="mw-snap-clear" data-snap-clear="${t.id}">清空</button>
+          </div>
+          <dl class="mw-snap-fields">${rows}</dl>`;
+    } else {
+        body = `<div class="mw-snap-empty">还没有内容 —— 点「填写」手动记一次</div>`;
+    }
+
+    return `
+      <div class="mw-tpl-card is-snap">
+        <div class="mw-tpl-head">
+          <div class="mw-tpl-name">
+            <b>${esc(t.name)}</b>
+            ${t.builtin ? '<span class="mw-tag-mini">内置</span>' : ''}
+            <span class="mw-tag-mini snap">快照</span>
+          </div>
+          <div class="mw-tpl-btns">
+            <button class="mw-chipbtn ${t.autofill ? 'on' : ''}" data-tpl-toggle="${t.id}" data-flag="autofill">${t.autofill ? '自动更新' : '仅手动'}</button>
+            <button class="mw-chipbtn" data-snap-edit="${t.id}">${snap ? '修改' : '填写'}</button>
+          </div>
+        </div>
+        <div class="mw-tpl-sub">${t.fields.length} 个字段 · 只保留最新一条</div>
+        ${body}
+      </div>`;
+}
+
+function plainCardHTML(t) {
+    return `
+      <div class="mw-tpl-card">
+        <div class="mw-tpl-head">
+          <div class="mw-tpl-name">
+            <b>${esc(t.name)}</b>
+            ${t.builtin ? '<span class="mw-tag-mini">内置</span>' : ''}
+          </div>
+          <div class="mw-tpl-btns">
+            <button class="mw-chipbtn" data-tpl-edit="${t.id}">${t.builtin ? '复制' : '编辑'}</button>
+          </div>
+        </div>
+        <div class="mw-tpl-sub">${t.fields.length} 个字段 · 每次新建一条</div>
+      </div>`;
+}
+
 function renderTemplatePanel() {
     if (!ui.tplpanel) return;
-    const list = getTemplates();
-
-    ui.tplpanel.innerHTML = list.map(t => {
-        const isSnap = !!t.singleton;
-        const snap = isSnap ? getSnapshot(t.id) : null;
-
-        const autoBtn = isSnap
-            ? `<button class="mw-chipbtn ${t.autofill ? 'on' : ''}"
-                       data-tpl-toggle="${t.id}" data-flag="autofill">${t.autofill ? '自动更新' : '仅手动'}</button>`
-            : '';
-
-        const mainBtn = isSnap
-            ? `<button class="mw-chipbtn" data-snap-edit="${t.id}">${snap ? '修改' : '填写'}</button>`
-            : `<button class="mw-chipbtn" data-tpl-edit="${t.id}">${t.builtin ? '复制' : '编辑'}</button>`;
-
-        let body = '';
-        if (isSnap) {
-            if (snap && hasAnyValue(snap.values)) {
-                const rows = t.fields
-                    .map(f => {
-                        const v = snap.values?.[f.id];
-                        const str = Array.isArray(v) ? v.join('、') : v;
-                        return str ? `<div><dt>${esc(f.label)}</dt><dd>${esc(String(str))}</dd></div>` : '';
-                    })
-                    .filter(Boolean)
-                    .join('');
-
-                body = `
-                  <div class="mw-snap-meta">
-                    <span class="mw-snap-time">更新于 ${minuteLabel(snap.updatedTs)}</span>
-                    <span class="mw-snap-src ${snap.source === 'auto' ? 'auto' : ''}">${snap.source === 'auto' ? '自动' : '手动'}</span>
-                    <button class="mw-snap-clear" data-snap-clear="${t.id}">清空</button>
-                  </div>
-                  <dl class="mw-snap-fields">${rows}</dl>`;
-            } else {
-                body = `<div class="mw-snap-empty">还没有内容 —— 聊完一轮会自动填进来</div>`;
-            }
-        }
-
-        return `
-          <div class="mw-tpl-card ${isSnap ? 'is-snap' : ''}">
-            <div class="mw-tpl-head">
-              <div class="mw-tpl-name">
-                <b>${esc(t.name)}</b>
-                ${t.builtin ? '<span class="mw-tag-mini">内置</span>' : ''}
-                ${isSnap ? '<span class="mw-tag-mini snap">快照</span>' : ''}
-              </div>
-              <div class="mw-tpl-btns">${autoBtn}${mainBtn}</div>
-            </div>
-            <div class="mw-tpl-sub">${t.fields.length} 个字段${isSnap ? ' · 只保留最新一条' : ' · 每次新建一条'}</div>
-            ${body}
-          </div>`;
+    ui.tplpanel.innerHTML = getTemplates().map(t => {
+        if (t.entity) return entityCardHTML(t);
+        if (t.singleton) return snapshotCardHTML(t);
+        return plainCardHTML(t);
     }).join('');
 }
 
@@ -2255,7 +2597,7 @@ function scheduleAuto() {
 /** 快照更新排在编织之后，避免两条链路同时打模型 */
 function scheduleFill() {
     clearTimeout(fillTimer);
-    fillTimer = setTimeout(() => autoFillSnapshots(), 3000);
+    fillTimer = setTimeout(() => autoUpdatePeople(), 3000);
 }
 
 function onChatChanged() {
@@ -2320,7 +2662,7 @@ async function init() {
         form: () => openForm(),
         weave: manualWeave,
         backfill: backfillAll,
-        fill: () => { store().fillSig = ''; return autoFillSnapshots(); },
+        fill: () => { store().fillSig = ''; return autoUpdatePeople(); },
         template: () => openTemplateEditor(GENERAL_TEMPLATE.id, true),
         get settings() { return S; },
         get store() { return store(); },

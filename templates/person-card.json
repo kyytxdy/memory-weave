@@ -1,0 +1,59 @@
+{
+  "name": "人物档案",
+  "version": 1,
+  "entity": true,
+  "keyField": "name",
+  "autofill": true,
+  "description": "实体型模板：一个人物一张卡，按 keyField（姓名）分卡，同名自动合并。每轮从上一轮对话里找人，判定重要度后建档；超过设定轮数没出现会自动移除。字段只收对话里能直接观察到的信息——身份、外貌、说话方式可以观察，动机和隐藏立场不能。",
+  "fields": [
+    {
+      "id": "name",
+      "label": "姓名",
+      "type": "text",
+      "group": "main",
+      "required": true
+    },
+    {
+      "id": "role",
+      "label": "身份",
+      "type": "text",
+      "group": "main",
+      "placeholder": "药房主人 / 护卫 / 学徒"
+    },
+    {
+      "id": "relation",
+      "label": "与我的关系",
+      "type": "text",
+      "group": "main",
+      "placeholder": "收留我的人 / 债主 / 宿敌"
+    },
+    {
+      "id": "attitude",
+      "label": "对我的态度",
+      "type": "text",
+      "group": "main",
+      "placeholder": "戒备 / 温和 / 试探"
+    },
+    {
+      "id": "look",
+      "label": "外貌特征",
+      "type": "text",
+      "group": "extra",
+      "placeholder": "一眼能认出的特征"
+    },
+    {
+      "id": "speech",
+      "label": "说话方式",
+      "type": "text",
+      "group": "extra",
+      "placeholder": "口癖、语气"
+    },
+    {
+      "id": "lastEvent",
+      "label": "最近互动",
+      "type": "textarea",
+      "group": "extra",
+      "placeholder": "这一轮和他发生了什么"
+    }
+  ]
+}
