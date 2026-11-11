@@ -1,10 +1,10 @@
 {
   "name": "人物档案",
-  "version": 3,
+  "version": 4,
   "entity": true,
   "keyField": "name",
   "autofill": true,
-  "description": "一个人物一张卡，按 name 分卡，同名合并。scope：self 只在主角卡出现，npc 只在其他人物卡出现，不写是通用。hint 是给模型的字段说明，会拼进提示词的字段清单里。",
+  "description": "一个人物一张卡，按 name 分卡，同名合并。scope：self 只在主角卡出现，npc 只在其他人物卡出现，不写是通用。hint 是给模型的字段说明。",
   "fields": [
     {
       "id": "name",
@@ -25,7 +25,7 @@
       "label": "年龄",
       "type": "text",
       "group": "main",
-      "hint": "对话里明确提到才写，不要推测"
+      "hint": "背景或对话里有依据就写；只能从称呼、外貌判断时写区间，如「约十四五岁」"
     },
     {
       "id": "relation",
@@ -63,14 +63,14 @@
       "label": "所在地",
       "type": "text",
       "group": "extra",
-      "hint": "当前所在或常驻地"
+      "hint": "从场景和对话判断此刻在哪；判断不出就写常驻地"
     },
     {
       "id": "birthday",
       "label": "生日",
       "type": "text",
       "group": "extra",
-      "hint": "对话里提到过才写，可以只写到季节"
+      "hint": "背景设定或对话里写过才填，可只写季节；都没有就不写"
     },
     {
       "id": "look",

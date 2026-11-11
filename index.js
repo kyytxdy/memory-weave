@@ -80,13 +80,13 @@ const PERSON_TEMPLATE = {
     fields: [
         { id: 'name', label: '姓名', type: 'text', group: 'main', required: true },
         { id: 'role', label: '身份', type: 'text', group: 'main', hint: '职业或社会角色，一句话说清' },
-        { id: 'age', label: '年龄', type: 'text', group: 'main', hint: '对话里明确提到才写，不要推测' },
+        { id: 'age', label: '年龄', type: 'text', group: 'main', hint: '背景或对话里有依据就写；只能从称呼、外貌判断时写区间，如「约十四五岁」' },
         { id: 'relation', label: '关系', type: 'text', group: 'main', scope: 'npc', hint: '和玩家角色的关系' },
         { id: 'attitude', label: '对我的态度', type: 'text', group: 'main', scope: 'npc', hint: '从语气和举动判断，不要猜内心' },
         { id: 'time', label: '时间', type: 'text', group: 'main', scope: 'self', hint: '故事内的第几天、什么时辰，如「第三天的深夜」' },
         { id: 'recent', label: '最近动态', type: 'textarea', group: 'main', hint: '这一轮里这个人做了什么' },
-        { id: 'place', label: '所在地', type: 'text', group: 'extra', hint: '当前所在或常驻地' },
-        { id: 'birthday', label: '生日', type: 'text', group: 'extra', hint: '对话里提到过才写，可以只写到季节' },
+        { id: 'place', label: '所在地', type: 'text', group: 'extra', hint: '从场景和对话判断此刻在哪；判断不出就写常驻地' },
+        { id: 'birthday', label: '生日', type: 'text', group: 'extra', hint: '背景设定或对话里写过才填，可只写季节；都没有就不写' },
         { id: 'look', label: '外貌', type: 'text', group: 'extra', hint: '一眼能认出的特征，不要泛泛而谈' },
         { id: 'note', label: '备注', type: 'text', group: 'extra', hint: '其它值得留意的细节' },
     ],
@@ -926,7 +926,60 @@ function parsePeople(raw, tpl) {
 
 const ROUND_MAX_TOKENS = 1400;
 
-function buildRoundPrompt(transcript, tpl, arcItems) {
+/** 角色卡 + 玩家设定。年龄、生日、常驻地通常只在这里出现 */
+function backgroundBlock() {
+    const parts = [];
+
+    try {
+        const ch = ctx.characters?.[ctx.characterId];
+        if (ch) {
+            const bits = [];
+            if (ch.name) bits.push(`角色名：${ch.name}`);
+            if (ch.description) bits.push(`设定：${String(ch.description).slice(0, 700)}`);
+            if (ch.personality) bits.push(`性格：${String(ch.personality).slice(0, 300)}`);
+            if (ch.scenario) bits.push(`场景：${String(ch.scenario).slice(0, 300)}`);
+            if (bits.length) parts.push(bits.join('\n'));
+        }
+    } catch (e) {
+        console.warn('[织忆] 读角色卡失败', e);
+    }
+
+    try {
+        const me = String(ctx.name1 || '').trim();
+        let persona = '';
+        const raw = ctx.personas;
+        if (raw && typeof raw === 'object') {
+            persona = raw[ctx.userAvatar] || raw.me || '';
+        }
+        if (!persona) persona = ctx.power_user?.persona_description || '';
+        if (me) {
+            parts.push(`我（玩家）：${me}${persona ? '。' + String(persona).slice(0, 400) : ''}`);
+        }
+    } catch { /* 忽略 */ }
+
+    if (!parts.length) return '';
+    return `<背景设定>\n${parts.join('\n\n')}\n</背景设定>`;
+}
+
+/** 已经有档案的人，给模型一个名单，避免同一角色换着说法写 */
+function knownPeopleLine(tpl) {
+    if (!tpl) return '';
+    let people = [];
+    try {
+        people = listEntities(tpl.id).filter(p => !p.absent).slice(0, 12);
+    } catch { return ''; }
+    if (!people.length) return '';
+
+    const keyId = tpl.keyField || 'name';
+    const lines = people.map(p => {
+        const name = p.values?.[keyId] || p.key;
+        const bits = [p.values?.role, p.values?.relation].filter(Boolean).join('，');
+        return `- ${name}${isSelfName(name) ? '（我）' : ''}${bits ? '：' + bits : ''}`;
+    });
+    return lines.join('\n');
+}
+
+function buildRoundPrompt(transcript, tpl, arcItems, extra = {}) {
     const wantPeople = !!tpl;
     const keyId = tpl ? (tpl.keyField || 'name') : 'name';
     const fmt = list => list.map(f => (f.hint ? `${f.label}（${f.hint}）` : f.label)).join('、');
@@ -971,10 +1024,18 @@ function buildRoundPrompt(transcript, tpl, arcItems) {
         wantPeople ? `低于 ${S.personMinImportance} 的人物不要输出。` : null,
         wantPeople ? '' : null,
         wantPeople ? 'people 的规则：' : null,
-        wantPeople ? '- 只写对话里明确出现的信息。没提到的字段整行省略，不要写「未知」「无」「未提及」。' : null,
-        wantPeople ? '- 不要编造外貌、年龄、生日、身世。' : null,
+        wantPeople ? '- 只写有依据的信息：本轮对话里出现的，或者背景设定里写明的。' : null,
+        wantPeople ? '- 两边都没有依据的字段整行省略，不要写「未知」「无」「未提及」。' : null,
+        wantPeople ? '- 背景设定里没有的，不要凭空编造年龄、生日、身世。' : null,
         wantPeople ? '- 本轮没出场的人物不要写。' : null,
         wantPeople ? '- 人称指代不明时宁可不写，也不要猜。' : null,
+        wantPeople ? '' : null,
+        wantPeople ? '—— 资料来源（重要）' : null,
+        wantPeople ? '有两个来源，都要看：' : null,
+        wantPeople ? '1. <背景设定>：角色卡、我的设定。年龄、生日、所在地、外貌通常只写在这里。' : null,
+        wantPeople ? '2. <本轮对话>：这一轮实际发生的事。' : null,
+        wantPeople ? '背景设定里明确写了的，直接取用 —— 不要因为本轮对话没提到就留空。' : null,
+        wantPeople ? '两边都没有依据的字段，才整行省略。' : null,
     ];
 
     if (hasArc) {
@@ -988,6 +1049,14 @@ function buildRoundPrompt(transcript, tpl, arcItems) {
             '短摘要：',
             arcItems.map((b, i) => `${i + 1}. ${b.text}`).join('\n'),
         );
+    }
+
+    if (extra.known) {
+        parts.push('', '已有档案（只补本轮的变化，不要重复描述）：', extra.known);
+    }
+
+    if (extra.background) {
+        parts.push('', extra.background);
     }
 
     parts.push('', '本轮对话：', transcript);
@@ -1069,7 +1138,10 @@ async function runRound() {
         .map(r => `${speakerOf(r.msg)}：${String(r.msg.mes).trim().slice(0, 700)}`)
         .join('\n');
 
-    const prompt = buildRoundPrompt(transcript, tpl, arcItems);
+    const prompt = buildRoundPrompt(transcript, tpl, arcItems, {
+        background: backgroundBlock(),
+        known: knownPeopleLine(tpl),
+    });
 
     let rawOut = '';
     let parsed = { beat: '', people: [], arc: '' };
@@ -2938,13 +3010,15 @@ function personRowHTML(t, p) {
     const fields = visibleFields(tplDef, isSelf);
     const brief = [p.values?.role, p.values?.relation].filter(Boolean).join(' · ');
 
+    // 空字段也列出来，用「—」占位：一眼看得出缺什么，点修改就能补
     const detail = fields
         .filter(f => f.id !== keyId)
         .map(f => {
             const v = p.values?.[f.id];
-            return v ? `<div><dt>${esc(f.label)}</dt><dd>${esc(String(v))}</dd></div>` : '';
+            return v
+                ? `<div><dt>${esc(f.label)}</dt><dd>${esc(String(v))}</dd></div>`
+                : `<div class="is-empty"><dt>${esc(f.label)}</dt><dd>—</dd></div>`;
         })
-        .filter(Boolean)
         .join('');
 
     const tk = `${t.id}::${p.key}`;

@@ -6,7 +6,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Ayin",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "homePage": "https://github.com/kyytxdy/memory-weave",
   "auto_update": false
 }

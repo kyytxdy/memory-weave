@@ -2004,3 +2004,13 @@ body.mw-locked {
     white-space: pre-wrap;
     word-break: break-word;
 }
+
+/* 空字段占位：列出来但压暗，方便看出缺什么 */
+.mw-snap-fields .is-empty dt,
+.mw-snap-fields .is-empty dd {
+    color: rgba(238, 241, 248, 0.2);
+}
+
+.mw-snap-fields .is-empty dd {
+    letter-spacing: 0.08em;
+}
