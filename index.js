@@ -33,6 +33,7 @@ const DEFAULT_SETTINGS = {
     autoSummarize: true,      // 时间线：逐轮自动总结
     autoArc: true,            // 记录：每 N 轮自动大总结
     autoFillSnapshots: true,  // 每轮更新人物档案
+    singleCall: true,         // 一轮只发一次请求，同时产出时间线与人物
     personTTL: 10,            // 超过这么多轮没出现就移除
     personMinImportance: 3,   // 低于这个重要度的新人物不建档
     useAI: true,
@@ -230,8 +231,11 @@ function entityPool(tplId) {
 }
 
 function listEntities(tplId) {
-    return Object.values(entityPool(tplId))
-        .sort((a, b) => (b.importance - a.importance) || (b.updatedTs - a.updatedTs));
+    return Object.values(entityPool(tplId)).sort((a, b) => {
+        const ax = a.absent ? 1 : 0;
+        const bx = b.absent ? 1 : 0;
+        return ax - bx || (b.importance - a.importance) || (b.updatedTs - a.updatedTs);
+    });
 }
 
 function getEntity(tplId, key) {
@@ -260,6 +264,8 @@ function upsertEntity(tplId, key, values, importance, round) {
         ts: prev?.ts || now,
         updatedTs: now,
         lastRound: round,
+        absent: false,
+        leftRound: undefined,
         source: 'auto',
     };
     persist();
@@ -273,24 +279,32 @@ function dropEntity(tplId, key) {
     persist();
 }
 
-/** 超过 N 轮没出现的人物自动移除 */
+/**
+ * 超过 N 轮没出现的人物标为「离场」，不删除。
+ * 删了就找不回来；标一下还能在剧情里回归，档案也留着。
+ * 主角永远不离场。
+ */
 function pruneEntities() {
     const total = assistantTotal();
     const ttl = Math.max(1, Number(S.personTTL) || 10);
-    let removed = 0;
+    let marked = 0;
 
     for (const tpl of getTemplates().filter(t => t.entity)) {
         const pool = entityPool(tpl.id);
-        for (const [key, e] of Object.entries(pool)) {
+        const keyId = tpl.keyField || 'name';
+        for (const [, e] of Object.entries(pool)) {
+            if (e.absent) continue;
+            if (isSelfName(e.values?.[keyId] || e.key)) continue;
             const last = Number(e.lastRound) || 0;
             if (total - last > ttl) {
-                delete pool[key];
-                removed++;
+                e.absent = true;
+                e.leftRound = total;
+                marked++;
             }
         }
     }
-    if (removed) persist();
-    return removed;
+    if (marked) persist();
+    return marked;
 }
 
 /* ---------- 快照（模板只存最新一条，覆盖式） ---------- */
@@ -692,60 +706,6 @@ function lastRoundMessages() {
     return out;
 }
 
-function buildFillPrompt(tpl, transcript) {
-    const fields = tpl.fields.map(f => {
-        const hint = f.type === 'select'
-            ? `选项：${(f.options || []).join('/')}`
-            : f.type === 'tags' ? '多个词，用顿号分隔'
-                : f.type === 'textarea' ? '一到两句话' : '短语';
-        return `- ${f.label}（${hint}）`;
-    }).join('\n');
-
-    return [
-        '你是状态记录员。根据下面这段最新对话，按字段清单填写当前状态。',
-        '',
-        '字段清单：',
-        fields,
-        '',
-        '输出规则（严格遵守，不要输出任何解释、标题或代码块）：',
-        '每条一行，格式为：字段名：内容',
-        '只填有明确依据的字段，拿不准的整行省略，不要写"未知""无"或"未提及"。',
-        '不要编造对话里没出现的信息。',
-        '每条内容控制在 40 字以内。',
-        '',
-        '最新对话：',
-        transcript,
-    ].join('\n');
-}
-
-function parseFilled(tpl, raw) {
-    const values = {};
-    const byLabel = new Map(tpl.fields.map(f => [f.label, f]));
-
-    for (const line of String(raw).split(/\r?\n/)) {
-        const t = line.trim().replace(/^[-*•·]\s*/, '').replace(/```.*/, '');
-        if (!t) continue;
-
-        const m = t.match(/^([^：:]{1,12})\s*[：:]\s*(.+)$/);
-        if (!m) continue;
-
-        const label = m[1].replace(/[【】\[\]]/g, '').trim();
-        const f = byLabel.get(label);
-        if (!f) continue;
-
-        const v = m[2].trim().slice(0, 160);
-        if (!v || /^(无|未知|未提及|空|n\/a|none|null|-|—)$/i.test(v)) continue;
-
-        if (f.type === 'tags') {
-            const arr = v.split(/[、,，\s]+/).filter(Boolean).slice(0, 8);
-            if (arr.length) values[f.id] = arr;
-        } else {
-            values[f.id] = v;
-        }
-    }
-    return values;
-}
-
 /* =========================================================
  * 人物档案：每轮找人、填字段、清掉久未出现的
  * ========================================================= */
@@ -819,8 +779,238 @@ function parsePeople(raw, tpl) {
     return out;
 }
 
+/* =========================================================
+ * 单次合并调用
+ *
+ * 原来时间线、人物、大总结各发一次请求，三个都要抢同一把锁。
+ * 模型一慢（reasoning_effort 高的时候一次二三十秒），先起的那个
+ * 占着锁不放，后面的等不到就被丢弃 —— 人物档案长期是 0 人。
+ *
+ * 改成一次请求同时产出三者：锁只有一个占用者，时序问题消失，
+ * 而且模型在一段上下文里同时看到「剧情」和「人物」，不会各说各话。
+ * ========================================================= */
+
+const ROUND_MAX_TOKENS = 1400;
+
+function buildRoundPrompt(transcript, tpl, arcItems) {
+    const wantPeople = !!tpl;
+    const keyId = tpl ? (tpl.keyField || 'name') : 'name';
+    const fmt = list => list.map(f => (f.hint ? `${f.label}（${f.hint}）` : f.label)).join('、');
+    const common = tpl ? fmt(tpl.fields.filter(f => !f.scope && f.id !== keyId)) : '';
+    const npcOnly = tpl ? fmt(tpl.fields.filter(f => f.scope === 'npc')) : '';
+    const selfOnly = tpl ? fmt(tpl.fields.filter(f => f.scope === 'self')) : '';
+    const me = String(ctx.name1 || '').trim() || '玩家角色';
+    const hasArc = !!(arcItems && arcItems.length);
+
+    const parts = [
+        '【这是一次文本处理任务，不是角色扮演。不要扮演任何角色，不要续写剧情，不要复述原文。】',
+        '',
+        '你在替一段角色扮演聊天整理记忆。读完下面这一轮对话，按固定标签输出。',
+        '',
+        '输出格式（只允许出现这些标签，标签外的字一个都不要写）：',
+        '<thought>',
+        '谁做了什么、哪些人物出场、有没有人离开。简短自述，不用给人看。',
+        '</thought>',
+        '<content>',
+        '<beat>一句话，50 字左右</beat>',
+        wantPeople ? '<people>' : null,
+        wantPeople ? '【人物名】重要度:1-5' : null,
+        wantPeople ? '字段名：内容' : null,
+        wantPeople ? '</people>' : null,
+        hasArc ? '<arc>若干条短摘要合并成的一段概要</arc>' : null,
+        '</content>',
+        '',
+        '—— beat',
+        '- 写清谁做了什么、结果如何，保留人名和具体动作。',
+        '- 用名字指代，不要用「他」「她」「对方」。',
+        '- 不复述台词，不评价，不写「接着」「这一轮」「然后」这类过场词。',
+        '- 50 字左右，最多 70 字，只写一句话。',
+        '',
+        wantPeople ? '—— people' : null,
+        wantPeople ? '本轮出场的人物，每人一段，以【姓名】重要度:N 开头。' : null,
+        wantPeople ? `所有人共有的字段：${common}` : null,
+        wantPeople && npcOnly ? `除「${me}」以外的人物，另外填：${npcOnly}` : null,
+        wantPeople && selfOnly ? `如果这个人就是「${me}」（玩家自己），改填这些：${selfOnly}` : null,
+        wantPeople ? '' : null,
+        wantPeople ? '重要度：5 = 主角或核心角色；4 = 有名字有台词、之后还会出现；' : null,
+        wantPeople ? '3 = 有名字有明确互动；2 = 只被顺口提到；1 = 背景路人。' : null,
+        wantPeople ? `低于 ${S.personMinImportance} 的人物不要输出。` : null,
+        wantPeople ? '' : null,
+        wantPeople ? 'people 的规则：' : null,
+        wantPeople ? '- 只写对话里明确出现的信息。没提到的字段整行省略，不要写「未知」「无」「未提及」。' : null,
+        wantPeople ? '- 不要编造外貌、年龄、生日、身世。' : null,
+        wantPeople ? '- 本轮没出场的人物不要写。' : null,
+        wantPeople ? '- 人称指代不明时宁可不写，也不要猜。' : null,
+    ];
+
+    if (hasArc) {
+        parts.push(
+            '',
+            '—— arc',
+            '- 把下面这些短摘要合并成一段连贯概要，200 字左右，最多 260 字。',
+            '- 写清整体发生了什么、人物关系有什么变化、留下了什么悬念。',
+            '- 第三人称客观陈述，不评价，不复述台词。',
+            '',
+            '短摘要：',
+            arcItems.map((b, i) => `${i + 1}. ${b.text}`).join('\n'),
+        );
+    }
+
+    parts.push('', '本轮对话：', transcript);
+    return parts.filter(x => x !== null).join('\n');
+}
+
+function pickTag(text, tag) {
+    const m = String(text || '').match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+    return m ? m[1].trim() : '';
+}
+
+function stripRoundTags(t) {
+    return String(t || '')
+        .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
+        .replace(/<\/?(?:content|people|beat|arc|memory)>/gi, '')
+        .trim();
+}
+
+/**
+ * 只认标签里的内容。标签对不上时才退一步从 content 里挑，
+ * 但绝不把整段自由文本切碎当记忆 —— 那正是旧版 73 条碎片的来源。
+ */
+function parseRound(raw, tpl) {
+    const text = String(raw || '');
+    const content = pickTag(text, 'content') || stripRoundTags(text);
+
+    let beat = pickTag(text, 'beat');
+    if (!beat) {
+        const first = content
+            .split(/\r?\n/)
+            .map(l => l.replace(/^[-*•\s]+/, '').replace(/^【.*?】/, '').trim())
+            .find(l => l.length >= 8 && !/^[<【]/.test(l));
+        beat = first || '';
+    }
+
+    const peopleBlock = pickTag(text, 'people') || content;
+
+    return {
+        beat: cleanSummary(oneSentence(beat, 80), 200),
+        people: tpl ? parsePeople(peopleBlock, tpl) : [],
+        arc: cleanSummary(pickTag(text, 'arc'), 900),
+    };
+}
+
+/** 一轮：一次请求，写时间线 + 人物 + （够数时）大总结 */
+async function runRound() {
+    const node = store();
+    const total = assistantTotal();
+    const span = Math.max(1, Number(S.beatEvery) || 1);
+    const arcSpan = Math.max(2, Number(S.arcEvery) || 10);
+
+    const from = node.beatMark + 1;
+    const to = Math.min(node.beatMark + span, total);
+    if (to < from) return { beat: null, arc: null, people: 0 };
+
+    const msgs = seqHistory().filter(x => x.seq >= from && x.seq <= to);
+    if (!msgs.length) return { beat: null, arc: null, people: 0 };
+
+    // 关掉「自动建档人物」就不向模型要人物段，省一次解析
+    const tpl = S.autoFillSnapshots === false
+        ? null
+        : (entityTemplates()[0] || getTemplates().find(t => t.entity) || PERSON_TEMPLATE);
+
+    const needArc = !!S.autoArc && (total - node.arcMark >= arcSpan);
+    const arcFrom = node.arcMark + 1;
+    const arcTo = node.arcMark + arcSpan;
+    const arcItems = needArc ? node.beats.filter(b => b.rTo >= arcFrom && b.rTo <= arcTo) : [];
+
+    const transcript = msgs
+        .map(r => `${speakerOf(r.msg)}：${String(r.msg.mes).trim().slice(0, 700)}`)
+        .join('\n');
+
+    const prompt = buildRoundPrompt(transcript, tpl, arcItems);
+
+    let parsed = { beat: '', people: [], arc: '' };
+    if (S.useAI) {
+        const raw = await aiCall(prompt, ROUND_MAX_TOKENS, 'memory-round');
+        parsed = parseRound(raw, tpl);
+
+        // 协议没走通，或 beat 是照抄原文，就把坏输出回灌再要一次
+        const empty = !parsed.beat && !parsed.people.length;
+        const copied = !!parsed.beat && tooSimilar(parsed.beat, transcript);
+
+        if (empty || copied) {
+            const why = empty
+                ? '你的输出里没有 <beat> 标签，也没有任何【姓名】人物段落。'
+                : '你的 <beat> 照抄了原文的句子，那不是总结。';
+            console.log('[织忆] 协议不达标，回灌重试：', why);
+
+            const feedback = [
+                prompt,
+                '',
+                '======== 你的上一次回答 ========',
+                String(raw || '（空）').slice(0, 1500),
+                '======== 问题 ========',
+                why,
+                '',
+                '请重新作答，只允许出现 <thought> <content> <beat> <people> <arc> 这些标签。',
+                '<beat> 必须是你自己写的一句话，不能出现原文里的句子。',
+            ].join('\n');
+
+            const again = parseRound(await aiCall(feedback, ROUND_MAX_TOKENS, 'memory-round'), tpl);
+            const better = !!again.beat && !tooSimilar(again.beat, transcript);
+            if (better) {
+                parsed = { ...again, people: again.people.length ? again.people : parsed.people };
+            } else if (empty) {
+                parsed = again;
+            }
+        }
+    }
+
+    // beat 兜底：模型彻底不配合就截一段，至少不断链
+    let beat = null;
+    let text = parsed.beat;
+    if (!isUsableSummary(text)) {
+        const joined = msgs.map(r => String(r.msg.mes).trim()).join(' ');
+        text = cleanSummary(joined.slice(0, 60) + '…', 200);
+    }
+    if (isUsableSummary(text)) {
+        beat = mkBeat(oneSentence(text, 80), from, to);
+        pushCapped('beats', beat);
+    }
+
+    let people = 0;
+    for (const p of (tpl ? parsed.people : [])) {
+        if (!p || !p.name) continue;
+        if (p.importance < Number(S.personMinImportance || 3)) continue;
+        try {
+            upsertEntity(tpl.id, p.name, p.values, p.importance, to);
+            people++;
+        } catch (e) {
+            console.warn('[织忆] 建档失败', p.name, e);
+        }
+    }
+
+    let arc = null;
+    if (needArc) {
+        node.arcMark = arcTo;
+        if (isUsableSummary(parsed.arc)) {
+            arc = mkArc(parsed.arc, arcFrom, arcTo);
+            pushCapped('arcs', arc);
+        }
+    }
+
+    node.beatMark = to;
+    persist();
+
+    const marked = pruneEntities();
+    if (marked) console.log(`[织忆] ${marked} 个人物超过 ${S.personTTL} 轮未出现，标为离场`);
+
+    return { beat, arc, people };
+}
+
 async function autoUpdatePeople(retry = 6) {
     if (!ready || !S.enabled || !S.autoFillSnapshots) return;
+    // 合并调用时人物已经在 runRound 里处理完了，这条路不用再跑
+    if (S.singleCall !== false) return;
 
     // 总结那边正在跑就排队等，不能直接丢弃
     if (filling || weaving) {
@@ -866,7 +1056,7 @@ async function autoUpdatePeople(retry = 6) {
         const removed = pruneEntities();
         refreshAll();
         refreshInjection();
-        if (removed) console.log(`[织忆] 移除 ${removed} 个超过 ${S.personTTL} 轮未出现的人物`);
+        if (removed) console.log(`[织忆] ${removed} 个人物超过 ${S.personTTL} 轮未出现，标为离场`);
     } finally {
         filling = false;
     }
@@ -907,6 +1097,13 @@ async function stepWeave(force = false) {
 
     if (total <= node.beatMark) return { beat: null, arc: null };
     if (!force && total - node.beatMark < span) return { beat: null, arc: null };
+
+    // 默认走合并调用：一次请求做完时间线、人物、大总结
+    if (S.singleCall !== false) {
+        const r = await runRound();
+        if (r.beat) await pruneOldMessages();
+        return { beat: r.beat, arc: r.arc, people: r.people };
+    }
 
     const from = node.beatMark + 1;
     const to = Math.min(node.beatMark + span, total);
@@ -991,12 +1188,12 @@ async function autoTick() {
     weaving = true;
     setBusyState(true);
     try {
-        const { beat, arc } = await stepWeave();
-        if (beat || arc) {
+        const { beat, arc, people } = await stepWeave();
+        if (beat || arc || people) {
             refreshInjection();
             refreshAll();
-            if (arc) toast('大总结已更新');
-            else if (beat) toast('记下一条');
+            if (arc) toast(`大总结已更新 · ${people || 0} 人`);
+            else if (beat) toast(people ? `记下一条 · ${people} 人` : '记下一条');
         }
     } catch (e) {
         console.error('[织忆] 自动总结失败', e);
@@ -1004,8 +1201,8 @@ async function autoTick() {
         weaving = false;
         setBusyState(false);
         updateStats();
-        // 总结占着锁的时候人物提取进不来，这里主动接力
-        setTimeout(() => autoUpdatePeople(), 800);
+        // 分开调用时才需要接力；合并调用已经在这一轮里做完了
+        if (S.singleCall === false) setTimeout(() => autoUpdatePeople(), 800);
     }
 }
 
@@ -1044,11 +1241,11 @@ async function manualWeave() {
     weaving = true;
     setBusyState(true);
     try {
-        const { beat, arc } = await stepWeave(true);
+        const { beat, arc, people } = await stepWeave(true);
         refreshInjection();
         refreshAll();
-        if (arc) toast('大总结已更新');
-        else if (beat) toast('记下一条');
+        if (arc) toast(`大总结已更新 · ${people || 0} 人`);
+        else if (beat) toast(people ? `记下一条 · ${people} 人` : '记下一条');
         else toast('这一轮没什么可记的');
     } catch (e) {
         console.error('[织忆] 手动总结失败', e);
@@ -1250,6 +1447,10 @@ function buildUI() {
               <div class="mw-row">
                 <div class="mw-row-main"><b>启用记忆</b><small>关闭后不再生成，也不再注入上下文</small></div>
                 <label class="mw-switch"><input type="checkbox" data-opt="enabled"><i></i></label>
+              </div>
+              <div class="mw-row">
+                <div class="mw-row-main"><b>一次请求做完</b><small>时间线、人物、大总结合并成一次调用；关掉则各自单独请求</small></div>
+                <label class="mw-switch"><input type="checkbox" data-opt="singleCall"><i></i></label>
               </div>
               <div class="mw-row">
                 <div class="mw-row-main"><b>时间线自动记录</b><small>每 N 轮压成一句话放进时间线</small></div>
@@ -2526,10 +2727,10 @@ function personRowHTML(t, p) {
     const open = openPeople.has(tk);
 
     return `
-      <div class="mw-person ${isSelf ? 'is-self' : ''} ${open ? 'open' : ''}" data-tk="${esc(tk)}">
+      <div class="mw-person ${isSelf ? 'is-self' : ''} ${p.absent ? 'is-absent' : ''} ${open ? 'open' : ''}" data-tk="${esc(tk)}">
         <button class="mw-person-head" data-person-toggle>
           <span class="mw-person-dot lv${p.importance}"></span>
-          <span class="mw-person-name">${esc(name)}${isSelf ? '<i class="mw-self-tag">我</i>' : ''}</span>
+          <span class="mw-person-name">${esc(name)}${isSelf ? '<i class="mw-self-tag">我</i>' : ''}${p.absent ? '<i class="mw-absent-tag">离场</i>' : ''}</span>
           <span class="mw-person-brief">${esc(brief)}</span>
           <span class="mw-person-arrow">›</span>
         </button>
@@ -2552,9 +2753,13 @@ function entityCardHTML(t) {
     const people = listEntities(t.id).sort((a, b) => {
         const sa = isSelfName(a.values?.[keyId] || a.key) ? 1 : 0;
         const sb = isSelfName(b.values?.[keyId] || b.key) ? 1 : 0;
-        return sb - sa || (b.importance - a.importance) || (b.updatedTs - a.updatedTs);
+        const aa = a.absent ? 1 : 0;
+        const ab = b.absent ? 1 : 0;
+        return sb - sa || aa - ab || (b.importance - a.importance) || (b.updatedTs - a.updatedTs);
     });
     const ttl = Math.max(1, Number(S.personTTL) || 10);
+    const away = people.filter(x => x.absent).length;
+    const here = people.length - away;
 
     return `
       <div class="mw-tpl-card is-entity">
@@ -2563,13 +2768,14 @@ function entityCardHTML(t) {
             <b>${esc(t.name)}</b>
             ${t.builtin ? '<span class="mw-tag-mini">内置</span>' : ''}
             <span class="mw-tag-mini snap">按人</span>
+            ${away ? `<span class="mw-tag-mini away">${here} 在场 · ${away} 离场</span>` : ''}
           </div>
           <div class="mw-tpl-btns">
             <button class="mw-chipbtn ${t.autofill ? 'on' : ''}" data-tpl-toggle="${t.id}" data-flag="autofill">${t.autofill ? '自动建档' : '仅手动'}</button>
             <button class="mw-chipbtn" data-person-add="${t.id}">＋</button>
           </div>
         </div>
-        <div class="mw-tpl-sub">${people.length} 人 · ${ttl} 轮未出现自动移除</div>
+        <div class="mw-tpl-sub">${people.length} 人 · ${ttl} 轮未出现标为离场</div>
         ${people.length
             ? `<div class="mw-person-list">${people.map(p => personRowHTML(t, p)).join('')}</div>`
             : `<div class="mw-snap-empty">还没有人物 —— 聊几轮会自动建档</div>`}

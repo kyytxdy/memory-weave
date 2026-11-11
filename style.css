@@ -1602,6 +1602,36 @@ body.mw-locked {
     border-color: rgba(255, 204, 122, 0.42);
 }
 
+/* 离场：整行压暗，但不清除 —— 剧情里还能回来 */
+.mw-person.is-absent {
+    opacity: 0.55;
+}
+
+.mw-person.is-absent .mw-person-name {
+    text-decoration: line-through;
+    text-decoration-color: rgba(255, 255, 255, 0.25);
+}
+
+.mw-absent-tag {
+    display: inline-block;
+    margin-left: 6px;
+    font-style: normal;
+    font-size: 9px;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: 5px;
+    color: rgba(238, 241, 248, 0.55);
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    vertical-align: 1px;
+}
+
+.mw-tag-mini.away {
+    color: rgba(238, 241, 248, 0.5);
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.09);
+}
+
 .mw-self-tag {
     display: inline-block;
     margin-left: 6px;
