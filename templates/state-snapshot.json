@@ -1,51 +1,58 @@
 {
   "name": "当前状态",
-  "version": 1,
+  "version": 2,
   "singleton": true,
   "autofill": true,
-  "description": "快照型模板。singleton=true 表示只保留最新一条，每次保存覆盖；autofill=true 表示每轮对话结束后自动从「上一轮」提取并覆盖。字段越少越准，建议 main 组不超过 4 个。",
+  "description": "快照型模板：只保留最新一条，每轮从上一轮对话自动重填并覆盖。字段设计遵循一个原则——只收对话里能直接观察到的东西，不收需要推断的结论。让模型推断身份、动机、隐藏情绪，它就会编，编出来的内容会被当成事实注入上下文。",
   "fields": [
     {
       "id": "scene",
       "label": "场景",
       "type": "text",
       "group": "main",
-      "placeholder": "此刻在哪、什么氛围"
+      "placeholder": "在哪、什么时辰、什么天气"
     },
     {
       "id": "present",
-      "label": "在场的人",
+      "label": "在场",
       "type": "text",
       "group": "main",
-      "placeholder": "谁在场"
+      "placeholder": "在场的人"
     },
     {
-      "id": "me",
-      "label": "我的处境",
-      "type": "textarea",
+      "id": "doing",
+      "label": "正在进行",
+      "type": "text",
       "group": "main",
-      "placeholder": "我正在做什么、什么状态"
+      "placeholder": "此刻正在做的事"
+    },
+    {
+      "id": "mood",
+      "label": "气氛",
+      "type": "select",
+      "group": "extra",
+      "options": ["平静", "轻松", "暧昧", "紧张", "压抑", "危险", "悲伤", "热烈"]
+    },
+    {
+      "id": "myself",
+      "label": "我的状态",
+      "type": "textarea",
+      "group": "extra",
+      "placeholder": "身体、情绪、手里拿着什么"
     },
     {
       "id": "other",
-      "label": "对方的状态",
+      "label": "对方状态",
       "type": "textarea",
       "group": "extra",
       "placeholder": "情绪、态度、小动作"
     },
     {
       "id": "thread",
-      "label": "进行中的事",
+      "label": "未了结",
       "type": "textarea",
       "group": "extra",
-      "placeholder": "还没了结的线索"
-    },
-    {
-      "id": "note",
-      "label": "备注",
-      "type": "text",
-      "group": "extra",
-      "placeholder": "其它值得留意的"
+      "placeholder": "悬着还没解决的事"
     }
   ]
 }

@@ -21,59 +21,61 @@
 
 <script>
   // 假数据：模拟酒馆上下文，让 index.js 原样跑起来
-  const HOUR = 3600 * 1000;
+  const MIN = 60 * 1000;
+  const HOUR = 60 * MIN;
   const DAY = 24 * HOUR;
   const now = Date.now();
 
   const chat = [];
-  for (let i = 0; i < 16; i++) {
-    chat.push({ is_user: i % 2 === 0, name: i % 2 === 0 ? '我' : '银', mes: `第 ${i + 1} 层的对话内容，用来撑起楼层统计。` });
+  for (let i = 0; i < 20; i++) {
+    chat.push({
+      is_user: i % 2 === 0,
+      name: i % 2 === 0 ? '林染' : '艾拉',
+      mes: `第 ${i + 1} 层的对话内容，用来撑起楼层统计。`,
+    });
   }
   chat.push(
-    { is_user: true, name: '我', mes: '那把伞你到底放哪了？' },
-    { is_user: false, name: '银', mes: '……柜子最上层。别问了，帮你去拿就是。' },
-    { is_user: true, name: '我', mes: '你居然记得。' },
-    { is_user: false, name: '银', mes: '你说过的东西，我记着。就这样。' },
+    { is_user: true, name: '林染', mes: '这个名字……再想想。' },
+    { is_user: false, name: '艾拉', mes: '想你这样，写到天亮也想不出来。' },
   );
 
-  const memories = [
+  const beats = [
     {
-      kind: 'record', id: 'r1', ts: now - 1.2 * DAY, templateId: 'general',
-      title: '雨夜里的那把伞', importance: 4,
-      values: {
-        title: '雨夜里的那把伞', category: '事件', subject: '银',
-        detail: '第一次真正的交谈。她把伞塞过来，自己淋着雨走掉，嘴上还说顺路。',
-        when: '第三天的夜里', place: '旧书店门口', quote: '「别淋着，你会感冒。」',
-        change: '从这一晚起，防备松了一点。', tags: ['初遇', '雨'],
-      },
-      tags: ['初遇', '雨'],
+      kind: 'beat', id: 'b1', ts: now - 1.1 * DAY,
+      text: '林染在药房后屋翻出一只旧木匣，里面是半张烧焦的地图；艾拉看了一眼就把匣子合上，说这东西不该留在店里。',
+      from: 4, to: 4,
     },
     {
-      kind: 'note', id: 'n1', ts: now - 1.1 * DAY,
-      text: '银从来不正眼看人，但会把杯子往你这边推。', cat: '关系', importance: 3,
+      kind: 'beat', id: 'b2', ts: now - 2.6 * HOUR,
+      text: '林染趴在桌上写名字，写了又划掉；艾拉端着温水过来放在桌角，扫了眼纸面，问他到底想不出还是不想取。',
+      from: 8, to: 8,
     },
     {
-      kind: 'note', id: 'n2', ts: now - 5 * HOUR,
-      text: '旧书店的老板娘姓周，欠了银一个人情，可以打听消息。', cat: '设定', importance: 2,
+      kind: 'beat', id: 'b3', ts: now - 2.1 * HOUR,
+      text: '林染说男孩叫林续，艾拉评价这名字听着像催人喝第二碗药，建议换一个；林染反问她有什么更好的。',
+      from: 9, to: 9,
     },
     {
-      kind: 'record', id: 'r2', ts: now - 3 * HOUR, templateId: 'general',
-      title: '关于「那件事」的沉默', importance: 5,
-      values: {
-        title: '关于「那件事」的沉默', category: '承诺', subject: '银',
-        detail: '只要问起她手背上那道疤，就会沉默很久，然后换个话题。答应过不再追问。',
-        quote: '「别再问了。就这一次。」',
-        change: '划出一条不能碰的边界。', tags: ['禁忌', '疤'],
-      },
-      tags: ['禁忌', '疤'],
+      kind: 'beat', id: 'b4', ts: now - 1.4 * HOUR,
+      text: '两人为一个名字争了半盏茶，最后定下「林参」。艾拉把纸收走，说写进药簿就算数了，不许再改。',
+      from: 10, to: 10,
     },
     {
-      kind: 'note', id: 'n3', ts: now - 2 * HOUR,
-      text: '她怕冷。天气转凉之后，话会变得更少。', cat: '情绪', importance: 3,
+      kind: 'beat', id: 'b5', ts: now - 42 * MIN,
+      text: '艾拉下楼前提起周老板问过林染的来历，林染没接话；楼下药柜的灯一直亮到很晚。',
+      from: 11, to: 11,
     },
     {
-      kind: 'note', id: 'n4', ts: now - 55 * 60 * 1000,
-      text: '约定过：下次下雪要一起出门，不许借故推掉。', cat: '承诺', importance: 4,
+      kind: 'beat', id: 'b6', ts: now - 12 * MIN,
+      text: '林染把潮湿的伞靠在门边，问艾拉明天要不要一起去药市；艾拉没有直接答应，只说看天气。',
+      from: 12, to: 12,
+    },
+  ];
+
+  const arcs = [
+    {
+      kind: 'arc', id: 'a1', ts: now - 3 * HOUR, from: 1, to: 10,
+      text: '林染带着一个捡来的男孩住进艾拉的药房，到这天已是第三天。他手背上的旧伤在换药时被艾拉看见，两人都没提。夜里他在二楼给男孩取名，写了又划，说叫林续，被艾拉一句「听着像催人喝第二碗药」噎住，争到最后定下「林参」，艾拉把纸收走，说写进药簿就不许再改。艾拉临走时提到周老板问过他的来历，林染没有接话。窗外雨一直没停，楼下药柜的灯亮到很晚。',
     },
   ];
 
@@ -84,14 +86,16 @@
       templateId: 'state',
       title: '当前状态',
       values: {
-        scene: '旧书店二楼，雨小了些',
-        present: '银、周老板',
-        me: '手里还捏着那把没还回去的伞',
-        other: '靠在书架边，语气比刚才松了些',
-        thread: '关于手背那道疤，还没问出口',
+        scene: '旧书店二楼，雨夜',
+        present: '林染、艾拉',
+        doing: '给捡来的男孩取名',
+        mood: '平静',
+        myself: '手里捏着划得乱七八糟的纸，袖口沾了墨',
+        other: '端着水杯靠在书架边，语气比白天松',
+        thread: '周老板问过林染的来历，还没回答',
       },
       ts: now - 3 * HOUR,
-      updatedTs: now - 12 * 60 * 1000,
+      updatedTs: now - 12 * MIN,
       source: 'auto',
     },
   };
@@ -100,14 +104,19 @@
     getContext: () => ({
       extensionSettings: {
         'memory-weave': {
-          chats: { 'test::demo': { cursor: 20, memories, snapshots, fillSig: '18,19' } },
+          chats: {
+            'test::demo': {
+              beats, arcs, memos: [], snapshots,
+              beatMark: 12, arcMark: 10, fillSig: '18,19',
+            },
+          },
         },
       },
       chat,
-      characters: [{ avatar: 'test', name: '银' }],
+      characters: [{ avatar: 'test', name: '艾拉' }],
       characterId: 0,
-      name1: '我',
-      name2: '银',
+      name1: '林染',
+      name2: '艾拉',
       getCurrentChatId: () => 'demo',
       saveSettingsDebounced: () => {},
       setExtensionPrompt: (k, v) => { window.__lastPrompt = v; },
@@ -124,14 +133,14 @@
 <script src="index.js"></script>
 
 <script>
-  // 支持 ?view=records|form|settings|template 直达某个界面
+  // 支持 ?view=records|templates|form|snap|settings 直达某个界面
   const view = new URLSearchParams(location.search).get('view');
   setTimeout(() => {
     const mw = globalThis.MemoryWeave;
     if (!mw) return;
     mw.open();
     setTimeout(() => {
-      if (view === 'records' || view === 'settings' || view === 'templates') {
+      if (['records', 'templates', 'settings'].includes(view)) {
         document.querySelector(`[data-tab="${view}"]`)?.click();
       } else if (view === 'snap') {
         document.querySelector('[data-tab="templates"]')?.click();
@@ -146,7 +155,7 @@
         document.querySelector('[data-tab="records"]')?.click();
         setTimeout(() => document.querySelector('[data-mw="new-record"]')?.click(), 120);
       } else if (view === 'template') {
-        document.querySelector('[data-tab="settings"]')?.click();
+        document.querySelector('[data-tab="templates"]')?.click();
         setTimeout(() => mw.template(), 120);
       } else if (view === 'expanded') {
         setTimeout(() => document.querySelector('.mw-timeline .mw-card')?.click(), 200);

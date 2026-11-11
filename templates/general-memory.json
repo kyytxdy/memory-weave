@@ -1,7 +1,7 @@
 {
-  "name": "通用记忆表",
-  "version": 1,
-  "description": "织忆的基础模板。字段可按需增删，改完在「设置 → 记忆模板 → 导入 JSON」里导入即可。group 为 main 的字段直接显示在卡片上，为 extra 的字段折叠在「展开更多」里。type 支持 text / textarea / select / tags。",
+  "name": "事件档案",
+  "version": 2,
+  "description": "普通模式模板：每次新建一条，进时间线。适合手动归档值得长期记住的事件、设定、承诺。想只保留最新一条请用快照模式。",
   "fields": [
     {
       "id": "title",
@@ -16,7 +16,16 @@
       "label": "分类",
       "type": "select",
       "group": "main",
-      "options": ["事件", "人物", "地点", "物品", "规则", "关系", "承诺", "其他"]
+      "options": [
+        "事件",
+        "人物",
+        "地点",
+        "物品",
+        "规则",
+        "关系",
+        "承诺",
+        "其他"
+      ]
     },
     {
       "id": "subject",

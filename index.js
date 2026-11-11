@@ -28,19 +28,22 @@ const FIELD_TYPES = [
 
 const DEFAULT_SETTINGS = {
     enabled: true,
-    autoSummarize: true,
+    autoSummarize: true,      // 时间线：逐轮自动总结
+    autoArc: true,            // 记录：每 N 轮自动大总结
     autoFillSnapshots: true,
     useAI: true,
-    batchSize: 10,
-    injectCount: 6,
-    maxKeep: 400,
+    beatEvery: 1,             // 每几轮生成一条短总结
+    arcEvery: 10,             // 每几轮生成一条大总结
+    injectBeats: 6,           // 注入多少条短总结
+    injectArcs: 2,            // 注入多少条大总结
+    maxKeep: 500,
     showFab: true,
     showMenuEntry: true,
     tone: 'archive',
     fab: null,
     templates: [],      // 用户自定义模板
     tplFlags: {},       // 内置模板的开关覆盖值 { [tplId]: { singleton, autofill } }
-    chats: {},          // chatKey -> { cursor, memories[], snapshots{}, fillSig }
+    chats: {},          // chatKey -> { beats[], arcs[], memos[], snapshots{}, beatMark, arcMark, fillSig }
 };
 
 const TONE_HINT = {
@@ -56,7 +59,7 @@ const TONE_HINT = {
 
 const GENERAL_TEMPLATE = {
     id: 'general',
-    name: '通用记忆表',
+    name: '事件档案',
     builtin: true,
     singleton: false,
     fields: [
@@ -75,6 +78,10 @@ const GENERAL_TEMPLATE = {
 /*
  * 快照型模板：singleton = 只保留最新一条，每次保存覆盖旧值
  * autofill = 每轮对话结束后由模型从「上一轮」提取，自动覆盖
+ *
+ * 字段设计参考 Memory Books 的 Side Prompts / Trackers：
+ * 只收「对话里能直接观察到的东西」，不收需要推断的结论。
+ * 收推断 = 模型编造 = 记忆污染。
  */
 const STATE_TEMPLATE = {
     id: 'state',
@@ -83,12 +90,13 @@ const STATE_TEMPLATE = {
     singleton: true,
     autofill: true,
     fields: [
-        { id: 'scene', label: '场景', type: 'text', group: 'main', placeholder: '此刻在哪、什么氛围' },
-        { id: 'present', label: '在场的人', type: 'text', group: 'main', placeholder: '谁在场' },
-        { id: 'me', label: '我的处境', type: 'textarea', group: 'main', placeholder: '我正在做什么、什么状态' },
-        { id: 'other', label: '对方的状态', type: 'textarea', group: 'extra', placeholder: '情绪、态度、小动作' },
-        { id: 'thread', label: '进行中的事', type: 'textarea', group: 'extra', placeholder: '还没了结的线索' },
-        { id: 'note', label: '备注', type: 'text', group: 'extra', placeholder: '其它值得留意的' },
+        { id: 'scene', label: '场景', type: 'text', group: 'main', placeholder: '在哪、什么时辰、什么天气' },
+        { id: 'present', label: '在场', type: 'text', group: 'main', placeholder: '在场的人' },
+        { id: 'doing', label: '正在进行', type: 'text', group: 'main', placeholder: '此刻正在做的事' },
+        { id: 'mood', label: '气氛', type: 'select', group: 'extra', options: ['平静', '轻松', '暧昧', '紧张', '压抑', '危险', '悲伤', '热烈'] },
+        { id: 'myself', label: '我的状态', type: 'textarea', group: 'extra', placeholder: '身体、情绪、手里拿着什么' },
+        { id: 'other', label: '对方状态', type: 'textarea', group: 'extra', placeholder: '情绪、态度、小动作' },
+        { id: 'thread', label: '未了结', type: 'textarea', group: 'extra', placeholder: '悬着还没解决的事' },
     ],
 };
 
@@ -197,10 +205,15 @@ function chatKey() {
 
 function store() {
     const k = chatKey();
-    if (!S.chats[k]) S.chats[k] = { cursor: 0, memories: [], snapshots: {}, fillSig: '' };
+    if (!S.chats[k]) S.chats[k] = {};
     const node = S.chats[k];
-    if (!Array.isArray(node.memories)) node.memories = [];
+    if (!Array.isArray(node.memories)) node.memories = [];   // 旧版遗留，只保留不显示
+    if (!Array.isArray(node.beats)) node.beats = [];
+    if (!Array.isArray(node.arcs)) node.arcs = [];
+    if (!Array.isArray(node.memos)) node.memos = [];
     if (typeof node.cursor !== 'number') node.cursor = 0;
+    if (typeof node.beatMark !== 'number') node.beatMark = 0;   // 已总结到的 assistant 条数
+    if (typeof node.arcMark !== 'number') node.arcMark = 0;
     if (!node.snapshots || typeof node.snapshots !== 'object') node.snapshots = {};
     if (typeof node.fillSig !== 'string') node.fillSig = '';
     return node;
@@ -259,25 +272,66 @@ function hasAnyValue(values) {
         (typeof v === 'string' && v.trim()) || (Array.isArray(v) && v.length));
 }
 
-function allMemories() {
-    return store().memories.map(m => ({ kind: 'note', ...m }));
+function allMemos() {
+    return store().memos;
 }
 
-function mkNote(text, cat, importance) {
+const uid = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+
+/**
+ * 清掉模型爱加的包装：代码块、引号、开场白、markdown 标题。
+ * 之前每行都收进记忆，就是因为没做这一步。
+ */
+function cleanSummary(raw, maxLen = 400) {
+    let t = String(raw || '').trim();
+
+    t = t.replace(/^```[a-zA-Z]*\s*/i, '').replace(/```\s*$/, '');
+    t = t.replace(/^["'“”「『]+/, '').replace(/["'“”」』]+$/, '');
+    t = t.replace(/^(好的|好的，|以下是|这是|总结[：:]|摘要[：:]|概要[：:]|本轮[：:])\s*/g, '');
+    t = t.replace(/^#{1,6}\s*/gm, '');
+    t = t.replace(/^\s*[-*•]\s*/gm, '');
+    t = t.replace(/\s+/g, ' ').trim();
+
+    if (t.length > maxLen) t = t.slice(0, maxLen).replace(/[，、；,;。]$/, '') + '…';
+    return t;
+}
+
+/** 明显不是总结的回复，直接判废，不写入 */
+function isUsableSummary(t) {
+    if (!t || t.length < 6) return false;
+    if (/^(我无法|抱歉|作为(一个)?(AI|语言模型)|我不能)/.test(t)) return false;
+    return true;
+}
+
+/** 时间线条目：一轮对话压成一句话，约 50 字 */
+function mkBeat(text, from, to) {
     return {
-        kind: 'note',
-        id: 'n' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        kind: 'beat',
+        id: uid('b'),
         ts: Date.now(),
-        text: String(text).replace(/\s+/g, ' ').trim().slice(0, 180),
-        cat: CATEGORIES.includes(cat) ? cat : '其他',
-        importance: clampImp(importance),
+        text: cleanSummary(text, 200),
+        from,
+        to,
     };
 }
 
-function mkRecord(payload) {
+/** 记录条目：跨多轮的大总结，约 200 字 */
+function mkArc(text, from, to) {
     return {
-        kind: 'record',
-        id: 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        kind: 'arc',
+        id: uid('a'),
+        ts: Date.now(),
+        text: cleanSummary(text, 900),
+        from,
+        to,
+    };
+}
+
+/** 手动填的表 */
+function mkMemo(payload) {
+    return {
+        kind: 'memo',
+        id: uid('m'),
         ts: Date.now(),
         templateId: payload.templateId,
         title: String(payload.title || '未命名记录').slice(0, 60),
@@ -292,12 +346,10 @@ function clampImp(n) {
     return Math.min(5, Math.max(1, v));
 }
 
-function pushMemories(list) {
+function pushCapped(key, item) {
     const node = store();
-    node.memories.push(...list);
-    if (node.memories.length > S.maxKeep) {
-        node.memories = node.memories.slice(-S.maxKeep);
-    }
+    node[key].push(item);
+    if (node[key].length > S.maxKeep) node[key] = node[key].slice(-S.maxKeep);
     persist();
 }
 
@@ -319,21 +371,33 @@ function recordLine(r) {
  * 摘要引擎
  * ========================================================= */
 
-function cleanHistory() {
+/* =========================================================
+ * 摘要引擎
+ * 两层：beat（每轮 50 字）+ arc（每 N 轮 200 字，从 beat 合并而来）
+ * ========================================================= */
+
+/** 当前聊天里 AI 回复的条数，也就是"轮数" */
+function assistantTotal() {
     const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
-    const out = [];
-    for (let i = 0; i < chat.length; i++) {
-        const m = chat[i];
-        if (!m || m.is_system) continue;
-        if (!m.mes || !String(m.mes).trim()) continue;
-        out.push({ index: i, msg: m });
+    let n = 0;
+    for (const m of chat) {
+        if (m && !m.is_system && !m.is_user && m.mes && String(m.mes).trim()) n++;
     }
-    return out;
+    return n;
 }
 
-function pendingSlice() {
-    const node = store();
-    return cleanHistory().filter(x => x.index >= node.cursor);
+/** 展开成带轮次序号的流：user 消息挂在它所属的那一轮上 */
+function seqHistory() {
+    const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+    const out = [];
+    let seq = 0;
+    for (let i = 0; i < chat.length; i++) {
+        const m = chat[i];
+        if (!m || m.is_system || !m.mes || !String(m.mes).trim()) continue;
+        if (!m.is_user) seq++;
+        out.push({ seq, index: i, msg: m });
+    }
+    return out;
 }
 
 function speakerOf(m) {
@@ -341,21 +405,35 @@ function speakerOf(m) {
     return m.name || ctx.name2 || 'Character';
 }
 
-function buildPrompt(transcript) {
-    const tone = TONE_HINT[S.tone] || TONE_HINT.archive;
+function buildBeatPrompt(transcript) {
     return [
-        '你是长期记忆整理员。下面是一段角色扮演对话的记录。',
-        '请从中提取 3-5 条值得长期记住的信息，供以后回忆使用。',
-        tone,
+        '把下面这一段角色扮演对话压缩成一句话。',
         '',
-        '输出规则（严格遵守，不要输出任何解释、标题或代码块）：',
-        '每条一行，格式为：[重要度1-5] 分类 | 内容',
-        '分类只能是：事件、关系、承诺、设定、情绪、其他',
-        '内容要具体，出现的人名必须保留，单条不超过 40 字。',
-        '只记录对话中明确发生或明确说过的内容，不要推测。',
+        '要求：',
+        '- 50 字左右，最多不超过 70 字。',
+        '- 写清谁做了什么、结果如何，保留出现的人名和具体动作。',
+        '- 用名字指代，不要用「他」「她」「对方」，否则过几轮就分不清是谁。',
+        '- 不复述台词，不评价，不写「接着」「这一轮」「然后」这类过场词。',
+        '- 直接输出正文。不要引号、不要标题、不要分点、不要任何解释。',
         '',
-        '对话记录：',
+        '对话：',
         transcript,
+    ].join('\n');
+}
+
+function buildArcPrompt(beats) {
+    return [
+        '下面是一段角色扮演中若干条按时间排列的短摘要。',
+        '请把它们合并成一段完整的概要。',
+        '',
+        '要求：',
+        '- 200 字左右，最多不超过 260 字。',
+        '- 写清整体发生了什么、人物关系有什么变化、留下了什么悬念。',
+        '- 用第三人称客观陈述，不评价，不复述台词。',
+        '- 直接输出正文。不要标题、不要分点、不要任何解释。',
+        '',
+        '短摘要：',
+        beats,
     ].join('\n');
 }
 
@@ -390,59 +468,82 @@ async function aiCall(prompt, responseLength = 500, quietName = 'memory') {
     return '';
 }
 
-async function aiSummarize(transcript) {
-    return aiCall(buildPrompt(transcript), 500);
-}
+/** 生成一条时间线短总结，覆盖 fromRound..toRound */
+async function generateBeat(fromRound, toRound) {
+    const msgs = seqHistory().filter(x => x.seq >= fromRound && x.seq <= toRound);
+    if (!msgs.length) return null;
 
-function parseMemories(raw) {
-    const out = [];
-    for (const line of String(raw).split(/\r?\n/)) {
-        const t = line.trim().replace(/^[-*•·]\s*/, '').replace(/```.*/, '').trim();
-        if (!t) continue;
-        if (/^(记忆|对话记录|以下是|输出)/.test(t)) continue;
-
-        const strict = t.match(/^\[?\s*([1-5])\s*\]?\s*[.、:：]?\s*([^|｜]{1,10})\s*[|｜]\s*(.+)$/);
-        if (strict) {
-            out.push(mkNote(strict[3], strict[2].replace(/[\[\]]/g, '').trim(), Number(strict[1])));
-            continue;
-        }
-        const loose = t.replace(/^\[?\s*[1-5]\s*\]?\s*/, '').replace(/^[^|｜]{1,10}[|｜]/, '');
-        if (loose.length >= 8 && loose.length <= 120) out.push(mkNote(loose, '其他', 3));
-    }
-
-    const seen = new Set();
-    return out.filter(m => {
-        const k = m.text.slice(0, 18);
-        if (seen.has(k)) return false;
-        seen.add(k);
-        return true;
-    }).slice(0, 8);
-}
-
-function fallbackSummarize(items) {
-    const joined = items.map(x => String(x.msg.mes).trim()).join(' ').replace(/\s+/g, ' ');
-    if (!joined) return [];
-    return [mkNote(joined.length > 80 ? joined.slice(0, 80) + '…' : joined, '事件', 3)];
-}
-
-async function weaveBatch(items) {
-    const transcript = items
-        .map(x => `${speakerOf(x.msg)}：${String(x.msg.mes).trim().slice(0, 600)}`)
+    const transcript = msgs
+        .map(r => `${speakerOf(r.msg)}：${String(r.msg.mes).trim().slice(0, 700)}`)
         .join('\n');
 
-    let mems = [];
+    let text = '';
     if (S.useAI) {
-        const raw = await aiSummarize(transcript);
-        if (raw) mems = parseMemories(raw);
+        text = cleanSummary(await aiCall(buildBeatPrompt(transcript), 200, 'memory-beat'), 200);
     }
-    if (!mems.length) mems = fallbackSummarize(items);
+    if (!isUsableSummary(text)) {
+        // 模型不配合时退化成截取，至少不断链
+        const joined = msgs.map(r => String(r.msg.mes).trim()).join(' ');
+        text = cleanSummary(joined.slice(0, 60) + '…', 200);
+    }
+    if (!isUsableSummary(text)) return null;
 
-    if (mems.length) {
-        pushMemories(mems);
-        refreshInjection();
-        refreshAll();
+    const beat = mkBeat(text, fromRound, toRound);
+    pushCapped('beats', beat);
+    return beat;
+}
+
+/** 生成一条大总结，把 arcMark 之后的 beat 合并，每 arcEvery 轮一次 */
+async function generateArc() {
+    const node = store();
+    const total = assistantTotal();
+    if (total - node.arcMark < S.arcEvery) return null;
+
+    const from = node.arcMark + 1;
+    const to = node.arcMark + S.arcEvery;
+    const picked = node.beats.filter(b => b.rTo >= from && b.rTo <= to);
+
+    node.arcMark = to;
+    persist();
+
+    if (!picked.length) return null;
+
+    const list = picked.map((b, i) => `${i + 1}. ${b.text}`).join('\n');
+    const text = cleanSummary(await aiCall(buildArcPrompt(list), 700, 'memory-arc'), 900);
+    if (!isUsableSummary(text)) return null;
+
+    const arc = mkArc(text, from, to);
+    pushCapped('arcs', arc);
+    return arc;
+}/** 通用模型调用：三条通道依次降级，任何一条通了就用 */
+async function aiCall(prompt, responseLength = 500, quietName = 'memory') {
+    if (typeof ctx.generateRaw === 'function') {
+        try {
+            const out = await ctx.generateRaw({ prompt, responseLength, trimNames: false });
+            if (out && String(out).trim()) return String(out);
+        } catch (e) {
+            console.warn('[织忆] generateRaw 不可用，尝试下一通道', e);
+        }
     }
-    return mems.length;
+
+    if (typeof ctx.generateQuietPrompt === 'function') {
+        try {
+            const out = await ctx.generateQuietPrompt({
+                quietPrompt: prompt, responseLength, quietName,
+            });
+            if (out && String(out).trim()) return String(out);
+        } catch (e) {
+            console.warn('[织忆] generateQuietPrompt(对象) 不可用，尝试旧签名', e);
+        }
+        try {
+            const out = await ctx.generateQuietPrompt(prompt, false, true, quietName, responseLength);
+            if (out && String(out).trim()) return String(out);
+        } catch (e) {
+            console.warn('[织忆] generateQuietPrompt(位置参数) 不可用', e);
+        }
+    }
+
+    return '';
 }
 
 /* =========================================================
@@ -564,55 +665,83 @@ async function autoFillSnapshots() {
  * 自动记忆
  * ========================================================= */
 
-function countPending() {
-    return pendingSlice().length;
+/* =========================================================
+ * 自动总结调度
+ * ========================================================= */
+
+function pendingRounds() {
+    return Math.max(0, assistantTotal() - store().beatMark);
 }
 
-async function autoTick(reason = 'auto') {
-    if (!ready || weaving || filling) return;
-    if (!S.enabled) return;
-    if (reason === 'auto' && !S.autoSummarize) return;
+/** 走一步：先补一条 beat，够数就再合并一条 arc */
+async function stepWeave(force = false) {
+    const node = store();
+    const total = assistantTotal();
+    const span = Math.max(1, Number(S.beatEvery) || 1);
 
-    const pending = pendingSlice();
-    if (pending.length < S.batchSize) return;
+    if (total <= node.beatMark) return { beat: null, arc: null };
+    if (!force && total - node.beatMark < span) return { beat: null, arc: null };
+
+    const from = node.beatMark + 1;
+    const to = Math.min(node.beatMark + span, total);
+
+    const beat = await generateBeat(from, to);
+    node.beatMark = to;
+    persist();
+
+    let arc = null;
+    if (S.autoArc) {
+        try {
+            arc = await generateArc();
+        } catch (e) {
+            console.warn('[织忆] 大总结生成失败', e);
+        }
+    }
+    return { beat, arc };
+}
+
+async function autoTick() {
+    if (!ready || weaving || filling) return;
+    if (!S.enabled || !S.autoSummarize) return;
+    if (pendingRounds() < Math.max(1, Number(S.beatEvery) || 1)) return;
 
     weaving = true;
     setBusyState(true);
     try {
-        const batch = pending.slice(0, S.batchSize);
-        const n = await weaveBatch(batch);
-        const node = store();
-        node.cursor = batch[batch.length - 1].index + 1;
-        persist();
-        if (n > 0) toast(`编织了 ${n} 条记忆`);
-        updateStats();
+        const { beat, arc } = await stepWeave();
+        if (beat || arc) {
+            refreshInjection();
+            refreshAll();
+            if (arc) toast('大总结已更新');
+            else if (beat) toast('记下一条');
+        }
     } catch (e) {
-        console.error('[织忆] 自动记忆失败', e);
-        toast('记忆生成失败，稍后再试');
+        console.error('[织忆] 自动总结失败', e);
     } finally {
         weaving = false;
         setBusyState(false);
+        updateStats();
     }
 }
 
 async function backfillAll() {
-    if (weaving) return;
+    if (weaving) { toast('正在处理中…'); return; }
+    if (!pendingRounds()) { toast('没有待整理的对话'); return; }
+
     weaving = true;
     setBusyState(true);
-    let total = 0;
+    let n = 0;
     try {
-        for (let guard = 0; guard < 40; guard++) {
-            const pending = pendingSlice();
-            if (pending.length < 2) break;
-            const batch = pending.slice(0, Math.max(S.batchSize, 4));
-            total += await weaveBatch(batch);
-            const node = store();
-            node.cursor = batch[batch.length - 1].index + 1;
-            persist();
-            updateStats();
-            toast(`已整理到第 ${node.cursor} 层…`);
+        for (let guard = 0; guard < 300; guard++) {
+            if (!pendingRounds()) break;
+            const { beat, arc } = await stepWeave(true);
+            if (beat) n++;
+            if (arc) n++;
+            toast(`已整理到第 ${store().beatMark} 轮…`);
         }
-        toast(total > 0 ? `整理完成，新增 ${total} 条记忆` : '没有可整理的内容');
+        refreshInjection();
+        refreshAll();
+        toast(n ? `整理完成，新增 ${n} 条` : '没有可整理的内容');
     } catch (e) {
         console.error('[织忆] 历史整理失败', e);
         toast('整理中断');
@@ -624,22 +753,20 @@ async function backfillAll() {
 }
 
 async function manualWeave() {
-    if (weaving) { toast('正在编织中…'); return; }
-    const pending = pendingSlice();
-    if (!pending.length) { toast('没有新的对话可整理'); return; }
+    if (weaving) { toast('正在处理中…'); return; }
+    if (!pendingRounds()) { toast('没有新的对话可总结'); return; }
 
     weaving = true;
     setBusyState(true);
     try {
-        const batch = pending.slice(0, Math.max(S.batchSize, 6));
-        const n = await weaveBatch(batch);
-        const node = store();
-        node.cursor = batch[batch.length - 1].index + 1;
-        persist();
+        const { beat, arc } = await stepWeave(true);
+        refreshInjection();
         refreshAll();
-        toast(n > 0 ? `编织了 ${n} 条记忆` : '这一批没什么可记的');
+        if (arc) toast('大总结已更新');
+        else if (beat) toast('记下一条');
+        else toast('这一轮没什么可记的');
     } catch (e) {
-        console.error('[织忆] 手动编织失败', e);
+        console.error('[织忆] 手动总结失败', e);
         toast('出错了，看下控制台');
     } finally {
         weaving = false;
@@ -681,27 +808,45 @@ function refreshInjection() {
     const clear = () => ctx.setExtensionPrompt(PROMPT_KEY, '', 1, 4, 0);
     if (!S.enabled) return clear();
 
-    const mems = allMemories()
-        .slice()
-        .sort((a, b) => b.importance - a.importance || a.ts - b.ts)
-        .slice(0, S.injectCount);
-
+    const node = store();
     const snap = snapshotBlock();
-    if (!mems.length && !snap) return clear();
 
-    const body = mems
-        .map(m => (m.kind === 'record' ? `- 【${recordCat(m)}】${recordLine(m)}` : `- ${m.text}`))
-        .join('\n');
+    const arcs = node.arcs.slice(-Math.max(1, Number(S.injectArcs) || 2));
+    const beats = node.beats.slice(-Math.max(1, Number(S.injectBeats) || 6));
+    const memos = node.memos.slice(-3);
 
     const parts = ['<long_term_memory>'];
+    let has = false;
+
     if (snap) {
         parts.push(snap, '');
+        has = true;
     }
-    if (body) {
-        parts.push(`以下是你与 ${ctx.name1 || '对方'} 之间值得记住的过往。回应当前话题时保持连贯与一致，`);
-        parts.push('但不要直接复述，也不要说"根据我的记忆"。');
-        parts.push(body);
+
+    if (arcs.length) {
+        parts.push('剧情概要（由早到晚）：');
+        for (const a of arcs) parts.push(`- ${a.text}`);
+        parts.push('');
+        has = true;
     }
+
+    if (beats.length) {
+        parts.push('最近的经过（由早到晚）：');
+        for (const b of beats) parts.push(`- ${b.text}`);
+        parts.push('');
+        has = true;
+    }
+
+    if (memos.length) {
+        parts.push('你记下的条目：');
+        for (const m of memos) parts.push(`- 【${recordCat(m)}】${recordLine(m)}`);
+        parts.push('');
+        has = true;
+    }
+
+    if (!has) return clear();
+
+    parts.push('回应时保持连贯，但不要直接复述以上内容，也不要说"根据我的记忆"。');
     parts.push('</long_term_memory>');
 
     // position 1 = IN_CHAT, depth 4, role 0 = SYSTEM
@@ -780,9 +925,9 @@ function buildUI() {
         </header>
 
         <div class="mw-stats">
-          <div class="mw-stat"><b data-mw="stat-total">0</b><span>记忆</span></div>
-          <div class="mw-stat"><b data-mw="stat-floor">0</b><span>已整理</span></div>
-          <div class="mw-stat"><b data-mw="stat-pending">0</b><span>待整理</span></div>
+          <div class="mw-stat"><b data-mw="stat-total">0</b><span>条目</span></div>
+          <div class="mw-stat"><b data-mw="stat-floor">0</b><span>已记录</span></div>
+          <div class="mw-stat"><b data-mw="stat-pending">0</b><span>待总结</span></div>
         </div>
 
         <nav class="mw-tabs">
@@ -797,8 +942,8 @@ function buildUI() {
             <div class="mw-timeline" data-mw="timeline"></div>
             <div class="mw-empty" data-mw="empty" hidden>
               <div class="mw-empty-orb"></div>
-              <p>还没有编织出记忆</p>
-              <span>多发几轮对话，或切到「记录」填一张表</span>
+              <p>时间线还是空的</p>
+              <span>每轮对话会自动记一条，也可以点下方手动补</span>
             </div>
           </section>
 
@@ -822,15 +967,19 @@ function buildUI() {
                 <label class="mw-switch"><input type="checkbox" data-opt="enabled"><i></i></label>
               </div>
               <div class="mw-row">
-                <div class="mw-row-main"><b>自动编织</b><small>攒够一批对话后自动提炼</small></div>
+                <div class="mw-row-main"><b>时间线自动记录</b><small>每 N 轮压成一句话放进时间线</small></div>
                 <label class="mw-switch"><input type="checkbox" data-opt="autoSummarize"><i></i></label>
+              </div>
+              <div class="mw-row">
+                <div class="mw-row-main"><b>大总结自动合并</b><small>攒够间隔后合并成一段长概要</small></div>
+                <label class="mw-switch"><input type="checkbox" data-opt="autoArc"><i></i></label>
               </div>
               <div class="mw-row">
                 <div class="mw-row-main"><b>自动更新快照</b><small>每轮结束按模板重填一次，覆盖旧值</small></div>
                 <label class="mw-switch"><input type="checkbox" data-opt="autoFillSnapshots"><i></i></label>
               </div>
               <div class="mw-row">
-                <div class="mw-row-main"><b>用模型提炼</b><small>关闭则退化为本地截取，质量较差</small></div>
+                <div class="mw-row-main"><b>用模型总结</b><small>关闭则退化为截取原文，质量较差</small></div>
                 <label class="mw-switch"><input type="checkbox" data-opt="useAI"><i></i></label>
               </div>
               <div class="mw-row">
@@ -841,12 +990,16 @@ function buildUI() {
 
             <div class="mw-group">
               <div class="mw-row mw-row-col">
-                <div class="mw-row-main"><b>每批对话数</b><small>累积多少条触发一次自动编织：<span data-mw="val-batch">10</span></small></div>
-                <input type="range" min="4" max="30" step="1" data-opt="batchSize">
+                <div class="mw-row-main"><b>时间线间隔</b><small>每 <span data-mw="val-beat">1</span> 轮记一条短总结</small></div>
+                <input type="range" min="1" max="10" step="1" data-opt="beatEvery">
               </div>
               <div class="mw-row mw-row-col">
-                <div class="mw-row-main"><b>注入条数</b><small>每轮带给模型多少条记忆：<span data-mw="val-inject">6</span></small></div>
-                <input type="range" min="2" max="15" step="1" data-opt="injectCount">
+                <div class="mw-row-main"><b>大总结间隔</b><small>每 <span data-mw="val-arc">10</span> 轮合并一段长概要</small></div>
+                <input type="range" min="5" max="60" step="5" data-opt="arcEvery">
+              </div>
+              <div class="mw-row mw-row-col">
+                <div class="mw-row-main"><b>注入条数</b><small>带 <span data-mw="val-inject">6</span> 条短总结进上下文</small></div>
+                <input type="range" min="2" max="20" step="1" data-opt="injectBeats">
               </div>
               <div class="mw-row">
                 <div class="mw-row-main"><b>记忆风格</b><small>影响提炼时的语气</small></div>
@@ -865,8 +1018,8 @@ function buildUI() {
         </div>
 
         <footer class="mw-foot" data-mw="foot">
-          <button class="mw-btn mw-btn-primary" data-mw="weave">编织一次</button>
-          <button class="mw-btn" data-mw="backfill">整理历史</button>
+          <button class="mw-btn mw-btn-primary" data-mw="weave">记一条</button>
+          <button class="mw-btn" data-mw="backfill">补全部</button>
         </footer>
 
         <div class="mw-toast" data-mw="toast"></div>
@@ -983,8 +1136,8 @@ function switchTab(name) {
     els('[data-panel]', ui.app).forEach(p => { p.hidden = p.dataset.panel !== name; });
 
     const map = {
-        timeline: `<button class="mw-btn mw-btn-primary" data-mw="weave">编织一次</button>
-                   <button class="mw-btn" data-mw="backfill">整理历史</button>`,
+        timeline: `<button class="mw-btn mw-btn-primary" data-mw="weave">记一条</button>
+                   <button class="mw-btn" data-mw="backfill">补全部</button>`,
         records: `<button class="mw-btn mw-btn-primary" data-mw="new-record">＋ 新建记录</button>`,
         templates: `<button class="mw-btn mw-btn-primary" data-mw="new-tpl">＋ 新建模板</button>
                     <button class="mw-btn" data-mw="import-tpl">导入 JSON</button>`,
@@ -1008,10 +1161,12 @@ function syncSettingsUI() {
         if (input.type === 'checkbox') input.checked = !!S[key];
         else input.value = S[key];
     });
-    const vb = el('[data-mw="val-batch"]');
+    const vb = el('[data-mw="val-beat"]');
+    const va = el('[data-mw="val-arc"]');
     const vi = el('[data-mw="val-inject"]');
-    if (vb) vb.textContent = S.batchSize;
-    if (vi) vi.textContent = S.injectCount;
+    if (vb) vb.textContent = S.beatEvery;
+    if (va) va.textContent = S.arcEvery;
+    if (vi) vi.textContent = S.injectBeats;
 }
 
 function applyOption(input, isRange = false) {
@@ -1020,8 +1175,9 @@ function applyOption(input, isRange = false) {
     else if (input.type === 'range') S[key] = Number(input.value);
     else S[key] = input.value;
 
-    if (key === 'batchSize') el('[data-mw="val-batch"]').textContent = S.batchSize;
-    if (key === 'injectCount') el('[data-mw="val-inject"]').textContent = S.injectCount;
+    if (key === 'beatEvery') el('[data-mw="val-beat"]').textContent = S.beatEvery;
+    if (key === 'arcEvery') el('[data-mw="val-arc"]').textContent = S.arcEvery;
+    if (key === 'injectBeats') el('[data-mw="val-inject"]').textContent = S.injectBeats;
     if (key === 'showFab') toggleFab(S.showFab);
     if (key === 'enabled') refreshInjection();
 
@@ -1064,7 +1220,8 @@ function catClass(cat) {
 }
 
 /* 记录卡的主体：按模板字段拆分 主/次 */
-function recordCardHTML(r) {
+/* 手动填的表 */
+function memoCardHTML(r) {
     const tpl = getTemplate(r.templateId);
     const cat = recordCat(r);
     const mainFields = tpl.fields.filter(f => f.group === 'main' && !['title', 'category', 'tags'].includes(f.id));
@@ -1079,43 +1236,57 @@ function recordCardHTML(r) {
 
     const mainHTML = mainFields.map(renderField).join('');
     const extraHTML = extraFields.map(renderField).join('');
-    const hasExtra = !!extraHTML;
 
     return `
       <div class="mw-card-top">
         <span class="mw-cat ${catClass(cat)}">${esc(cat)}</span>
-        ${dotsMarkup(r.importance)}
+        <span class="mw-round memo">手记</span>
         <time>${clockLabel(r.ts)}</time>
       </div>
       <h3 class="mw-rec-title">${esc(r.title)}</h3>
       ${mainHTML ? `<dl class="mw-rec-fields">${mainHTML}</dl>` : ''}
-      ${hasExtra ? `<dl class="mw-rec-fields mw-rec-more">${extraHTML}</dl>
+      ${extraHTML ? `<dl class="mw-rec-fields mw-rec-more">${extraHTML}</dl>
         <span class="mw-expand-hint">展开更多 ›</span>` : ''}
       ${tags.length ? `<div class="mw-tags">${tags.map(t => `<span>#${esc(t)}</span>`).join('')}</div>` : ''}
     `;
 }
 
-function noteCardHTML(m) {
+/* 时间线条目：一句话 */
+function beatCardHTML(b) {
     return `
       <div class="mw-card-top">
-        <span class="mw-cat ${catClass(m.cat)}">${esc(m.cat)}</span>
-        ${dotsMarkup(m.importance)}
-        <time>${clockLabel(m.ts)}</time>
+        <span class="mw-round">第 ${b.to ?? '?'} 轮</span>
+        <time>${clockLabel(b.ts)}</time>
       </div>
-      <p class="mw-text">${esc(m.text)}</p>
+      <p class="mw-text">${esc(b.text)}</p>
     `;
 }
 
-function cardHTML(m) {
-    const isRec = m.kind === 'record';
+/* 大总结 */
+function arcCardHTML(a) {
     return `
-      <article class="mw-item ${isRec ? 'is-record' : ''}" style="--i:0" data-id="${m.id}" data-kind="${m.kind}">
-        <span class="mw-node" data-imp="${m.importance}"></span>
+      <div class="mw-card-top">
+        <span class="mw-round arc">第 ${a.from}–${a.to} 轮</span>
+        <time>${clockLabel(a.ts)}</time>
+      </div>
+      <p class="mw-arc-text">${esc(a.text)}</p>
+    `;
+}
+
+function cardHTML(item) {
+    const kind = item.kind;
+    const body = kind === 'arc' ? arcCardHTML(item)
+        : kind === 'memo' ? memoCardHTML(item)
+            : beatCardHTML(item);
+
+    return `
+      <article class="mw-item is-${kind}" style="--i:0" data-id="${item.id}" data-kind="${kind}">
+        <span class="mw-node"></span>
         <div class="mw-card">
-          ${isRec ? recordCardHTML(m) : noteCardHTML(m)}
+          ${body}
           <div class="mw-card-act">
-            <button data-act="edit" data-id="${m.id}">${isRec ? '编辑' : '编辑'}</button>
-            <button data-act="del" data-id="${m.id}">删除</button>
+            <button data-act="edit" data-id="${item.id}">编辑</button>
+            <button data-act="del" data-id="${item.id}">删除</button>
           </div>
         </div>
       </article>`;
@@ -1123,9 +1294,13 @@ function cardHTML(m) {
 
 function renderTimeline() {
     if (!ui.timeline) return;
-    const mems = allMemories().sort((a, b) => b.ts - a.ts);
+    const node = store();
+    const items = [
+        ...node.beats.map(b => ({ ...b, kind: 'beat' })),
+        ...node.memos.map(m => ({ ...m, kind: 'memo' })),
+    ].sort((a, b) => b.ts - a.ts);
 
-    if (!mems.length) {
+    if (!items.length) {
         ui.timeline.innerHTML = '';
         if (ui.empty) ui.empty.hidden = false;
         return;
@@ -1133,7 +1308,7 @@ function renderTimeline() {
     if (ui.empty) ui.empty.hidden = true;
 
     const groups = new Map();
-    for (const m of mems) {
+    for (const m of items) {
         const label = dayLabel(m.ts);
         if (!groups.has(label)) groups.set(label, []);
         groups.get(label).push(m);
@@ -1153,34 +1328,28 @@ function renderTimeline() {
 
 function renderRecords() {
     if (!ui.recordlist) return;
-    const recs = allMemories().filter(m => m.kind === 'record').sort((a, b) => b.ts - a.ts);
+    const arcs = [...store().arcs].sort((a, b) => b.ts - a.ts);
 
-    if (!recs.length) {
+    if (!arcs.length) {
         ui.recordlist.innerHTML = '';
-        if (ui.recEmpty) ui.recEmpty.hidden = false;
+        if (ui.recEmpty) {
+            ui.recEmpty.hidden = false;
+            const p = el('p', ui.recEmpty);
+            if (p) p.textContent = '还没有大总结';
+            const s = el('span', ui.recEmpty);
+            if (s) s.textContent = `聊满 ${S.arcEvery} 轮会自动合并一条`;
+        }
         return;
     }
     if (ui.recEmpty) ui.recEmpty.hidden = true;
 
-    const byTpl = new Map();
-    for (const r of recs) {
-        const key = r.templateId;
-        if (!byTpl.has(key)) byTpl.set(key, []);
-        byTpl.get(key).push(r);
-    }
-
-    let html = '';
+    let html = `<div class="mw-timeline">`;
     let i = 0;
-    for (const [tplId, list] of byTpl) {
-        const tpl = getTemplate(tplId);
-        html += `<div class="mw-timeline">
-                   <div class="mw-day"><span>${esc(tpl.name)} · ${list.length}</span></div>`;
-        for (const r of list) {
-            html += cardHTML(r).replace('--i:0', `--i:${Math.min(i, 12)}`);
-            i++;
-        }
-        html += `</div>`;
+    for (const a of arcs) {
+        html += cardHTML({ ...a, kind: 'arc' }).replace('--i:0', `--i:${Math.min(i, 12)}`);
+        i++;
     }
+    html += `</div>`;
     ui.recordlist.innerHTML = html;
 }
 
@@ -1191,9 +1360,9 @@ function updateStats() {
         const n = el(`[data-mw="stat-${k}"]`);
         if (n) n.textContent = v;
     };
-    set('total', node.memories.length);
-    set('floor', node.cursor);
-    set('pending', countPending());
+    set('total', node.beats.length + node.arcs.length + node.memos.length);
+    set('floor', node.beatMark);
+    set('pending', pendingRounds());
 }
 
 function refreshAll() {
@@ -1208,25 +1377,29 @@ function refreshAll() {
  * 卡片操作
  * ========================================================= */
 
-function findMemory(id) {
-    return store().memories.find(m => m.id === id);
+function findItem(id) {
+    const node = store();
+    return node.beats.find(x => x.id === id)
+        || node.arcs.find(x => x.id === id)
+        || node.memos.find(x => x.id === id)
+        || null;
 }
 
 function handleCardAction(btn) {
     const id = btn.dataset.id;
-    const mem = findMemory(id);
-    if (!mem) return;
+    const item = findItem(id);
+    if (!item) return;
 
     if (btn.dataset.act === 'edit') {
-        if (mem.kind === 'record') { openForm(id); return; }
+        if (item.kind === 'memo') { openForm(id); return; }
         const card = btn.closest('.mw-card');
-        const p = el('.mw-text', card);
+        const p = el('.mw-text, .mw-arc-text', card);
         if (!p || el('.mw-edit', card)) return;
         const ta = document.createElement('textarea');
         ta.className = 'mw-edit';
         ta.dataset.id = id;
-        ta.value = mem.text;
-        ta.rows = 3;
+        ta.value = item.text;
+        ta.rows = item.kind === 'arc' ? 6 : 3;
         p.replaceWith(ta);
         ta.focus();
         ta.setSelectionRange(ta.value.length, ta.value.length);
@@ -1235,13 +1408,14 @@ function handleCardAction(btn) {
 
     if (btn.dataset.act === 'del') {
         const node = store();
-        const before = node.memories.slice();
-        node.memories = node.memories.filter(m => m.id !== id);
+        const key = item.kind === 'arc' ? 'arcs' : item.kind === 'memo' ? 'memos' : 'beats';
+        const before = node[key].slice();
+        node[key] = node[key].filter(x => x.id !== id);
         persist();
         refreshAll();
         refreshInjection();
         showUndoToast('已删除', () => {
-            node.memories = before;
+            node[key] = before;
             persist();
             refreshAll();
             refreshInjection();
@@ -1264,11 +1438,11 @@ function showUndoToast(msg, onUndo) {
 
 function commitNoteEdit(ta) {
     if (!ta.isConnected) return;
-    const mem = findMemory(ta.dataset.id);
-    if (ta.dataset.cancelled === '1' || !mem) { refreshAll(); return; }
+    const item = findItem(ta.dataset.id);
+    if (ta.dataset.cancelled === '1' || !item) { refreshAll(); return; }
     const val = ta.value.replace(/\s+/g, ' ').trim();
-    if (val && val !== mem.text) {
-        mem.text = val.slice(0, 180);
+    if (val && val !== item.text) {
+        item.text = val.slice(0, item.kind === 'arc' ? 900 : 200);
         persist();
         refreshInjection();
         toast('已更新');
@@ -1278,20 +1452,38 @@ function commitNoteEdit(ta) {
 
 function clearMemories() {
     const node = store();
-    if (!node.memories.length) { toast('本来就是空的'); return; }
+    const total = node.beats.length + node.arcs.length + node.memos.length + node.memories.length;
+    if (!total) { toast('本来就是空的'); return; }
+
     const btn = el('[data-mw="clear"]', ui.app);
     if (btn.dataset.armed !== '1') {
         btn.dataset.armed = '1';
-        btn.textContent = `确认清空 ${node.memories.length} 条？再点一次`;
+        btn.textContent = `确认清空 ${total} 条？再点一次`;
         setTimeout(() => {
             btn.dataset.armed = '0';
             btn.textContent = '清空本角色的全部记忆';
         }, 4000);
         return;
     }
-    const before = { memories: node.memories.slice(), cursor: node.cursor };
+
+    const before = {
+        beats: node.beats.slice(),
+        arcs: node.arcs.slice(),
+        memos: node.memos.slice(),
+        memories: node.memories.slice(),
+        beatMark: node.beatMark,
+        arcMark: node.arcMark,
+        cursor: node.cursor,
+    };
+
+    node.beats = [];
+    node.arcs = [];
+    node.memos = [];
     node.memories = [];
+    node.beatMark = 0;
+    node.arcMark = 0;
     node.cursor = 0;
+
     btn.dataset.armed = '0';
     btn.textContent = '清空本角色的全部记忆';
     persist();
@@ -1532,7 +1724,8 @@ function openForm(recordId = null) {
     if (!ui.app.classList.contains('mw-open')) openPanel();
     ensureDrawer();
 
-    const rec = recordId ? findMemory(recordId) : null;
+    const found = recordId ? findItem(recordId) : null;
+    const rec = found && found.kind === 'memo' ? found : null;
     editingRecordId = rec?.id || null;
     editingSnapshotTpl = null;
 
@@ -1657,7 +1850,7 @@ function saveRecord() {
     }
 
     const tplId = el('[data-dr="tplsel"]', d)?.value
-        || (editingRecordId ? findMemory(editingRecordId)?.templateId : GENERAL_TEMPLATE.id)
+        || (editingRecordId ? findItem(editingRecordId)?.templateId : GENERAL_TEMPLATE.id)
         || GENERAL_TEMPLATE.id;
     const tpl = getTemplate(tplId);
 
@@ -1673,7 +1866,7 @@ function saveRecord() {
     }
 
     if (editingRecordId) {
-        const mem = findMemory(editingRecordId);
+        const mem = findItem(editingRecordId);
         if (mem) {
             mem.title = title.slice(0, 60);
             mem.values = values;
@@ -1689,7 +1882,7 @@ function saveRecord() {
         return;
     }
 
-    pushMemories([mkRecord({ templateId: tplId, title, values, tags, importance })]);
+    pushCapped('memos', mkMemo({ templateId: tplId, title, values, tags, importance }));
     refreshInjection();
     refreshAll();
     closeDrawer();
@@ -2128,7 +2321,7 @@ async function init() {
                     filled: Object.keys(s.values || {}).length,
                 })),
                 cursor: node.cursor,
-                pending: countPending(),
+                pending: pendingRounds(),
                 templates: getTemplates().map(t => `${t.name}${t.singleton ? '[快照]' : ''}(${t.fields.length})`),
             };
         },

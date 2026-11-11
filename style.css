@@ -348,22 +348,64 @@ body.mw-locked {
     transition: 0.3s;
 }
 
-.mw-node[data-imp="5"],
-.mw-node[data-imp="4"] {
-    background: var(--mw-accent);
-    box-shadow: 0 0 0 3px rgba(10, 13, 22, 1), 0 0 12px rgba(139, 147, 255, 0.85);
+/* 时间线：一轮一句话 */
+.mw-item.is-beat .mw-node {
+    background: rgba(139, 147, 255, 0.78);
+    box-shadow: 0 0 0 3px rgba(10, 13, 22, 1), 0 0 10px rgba(139, 147, 255, 0.55);
 }
 
-.mw-node[data-imp="3"] {
-    background: rgba(139, 147, 255, 0.62);
-    box-shadow: 0 0 0 3px rgba(10, 13, 22, 1), 0 0 8px rgba(139, 147, 255, 0.4);
-}
-
-.mw-item.is-record .mw-node {
+/* 大总结：青色菱形 */
+.mw-item.is-arc .mw-node {
+    width: 10px;
+    height: 10px;
     border-radius: 3px;
     transform: rotate(45deg);
     background: var(--mw-accent-2);
     box-shadow: 0 0 0 3px rgba(10, 13, 22, 1), 0 0 12px rgba(95, 227, 201, 0.7);
+}
+
+/* 手填的表：金色菱形 */
+.mw-item.is-memo .mw-node {
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
+    transform: rotate(45deg);
+    background: var(--mw-gold);
+    box-shadow: 0 0 0 3px rgba(10, 13, 22, 1), 0 0 10px rgba(255, 204, 122, 0.6);
+}
+
+/* 轮次标签 */
+.mw-round {
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 6px;
+    color: #bcc2ff;
+    background: rgba(139, 147, 255, 0.14);
+    border: 1px solid rgba(139, 147, 255, 0.2);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.mw-round.arc {
+    color: #8df0dc;
+    background: rgba(95, 227, 201, 0.12);
+    border-color: rgba(95, 227, 201, 0.24);
+}
+
+.mw-round.memo {
+    color: #ffd99b;
+    background: rgba(255, 204, 122, 0.12);
+    border-color: rgba(255, 204, 122, 0.22);
+}
+
+/* 大总结正文：比短总结更松的行距 */
+.mw-arc-text {
+    margin: 0;
+    font-size: 13.5px;
+    line-height: 1.74;
+    color: rgba(238, 241, 248, 0.94);
+    word-break: break-word;
 }
 
 /* ---------- 卡片 ---------- */
@@ -591,6 +633,10 @@ body.mw-locked {
     gap: 8px;
     padding: 54px 20px;
     text-align: center;
+}
+
+.mw-empty[hidden] {
+    display: none;
 }
 
 .mw-empty-orb {
