@@ -140,6 +140,13 @@ function loadSettings() {
     if (!s.chats || typeof s.chats !== 'object') s.chats = {};
     if (!Array.isArray(s.templates)) s.templates = [];
     S = s;
+
+    // 宿主存储全是空的就从本地备份恢复
+    const restored = lsLoad();
+    saveChannel = saveHook() ? 'host' : 'local';
+    console.log('[织忆] 存储通道：', saveChannel === 'host' ? '宿主设置' : '仅本地备份',
+        restored ? '（已从备份恢复）' : '');
+
     return s;
 }
 
@@ -158,21 +165,77 @@ function saveHook() {
     return null;
 }
 
+/* ---------- 本地备份：宿主的保存通道不可靠时兜底 ---------- */
+
+const LS_KEY = 'memory-weave:data:v1';
+
+function lsSave() {
+    try {
+        localStorage.setItem(LS_KEY, JSON.stringify({
+            chats: S.chats,
+            templates: S.templates,
+            tplFlags: S.tplFlags,
+            savedAt: Date.now(),
+        }));
+        return true;
+    } catch (e) {
+        console.warn('[织忆] 本地备份写入失败，可能超出配额', e);
+        return false;
+    }
+}
+
+/** 只在宿主存储是空的时候用备份，不覆盖已有数据 */
+function lsLoad() {
+    try {
+        const raw = localStorage.getItem(LS_KEY);
+        if (!raw) return false;
+        const d = JSON.parse(raw);
+        if (!d || typeof d !== 'object') return false;
+
+        let used = false;
+        if ((!S.chats || !Object.keys(S.chats).length) && d.chats && Object.keys(d.chats).length) {
+            S.chats = d.chats;
+            used = true;
+        }
+        if ((!Array.isArray(S.templates) || !S.templates.length) && Array.isArray(d.templates) && d.templates.length) {
+            S.templates = d.templates;
+            used = true;
+        }
+        if ((!S.tplFlags || !Object.keys(S.tplFlags).length) && d.tplFlags && Object.keys(d.tplFlags).length) {
+            S.tplFlags = d.tplFlags;
+            used = true;
+        }
+        if (used) console.log('[织忆] 已从本地备份恢复', d.savedAt ? new Date(d.savedAt).toLocaleString() : '');
+        return used;
+    } catch (e) {
+        console.warn('[织忆] 本地备份读取失败', e);
+        return false;
+    }
+}
+
 let saveWarned = false;
+let saveChannel = 'none';
+
 function persist() {
+    // 先写自己的备份：宿主那条路不可靠时，至少这部分数据还在
+    lsSave();
+
     const hook = saveHook();
     if (!hook) {
+        saveChannel = 'local';
         if (!saveWarned) {
             saveWarned = true;
-            console.error('[织忆] 找不到保存设置的方法，记忆只会存在内存里，重启会丢。可用的 ctx 键：',
+            console.error('[织忆] 找不到保存设置的方法，只写本地备份。可用的 ctx 键：',
                 Object.keys(ctx || {}).filter(k => /save|setting/i.test(k)));
         }
         return;
     }
     try {
         hook();
+        saveChannel = 'host';
     } catch (e) {
-        console.warn('[织忆] 保存设置失败', e);
+        saveChannel = 'local';
+        console.warn('[织忆] 宿主保存失败，已退回本地备份', e);
     }
 }
 
@@ -930,8 +993,21 @@ const ROUND_MAX_TOKENS = 1400;
 function backgroundBlock() {
     const parts = [];
 
+    let ch = null;
     try {
-        const ch = ctx.characters?.[ctx.characterId];
+        const list = ctx.characters;
+        const id = ctx.characterId ?? ctx.this_chid;
+        if (Array.isArray(list)) {
+            ch = list[id] || list.find(c => c && c.name && c.name === ctx.name2) || null;
+        } else if (list && typeof list === 'object') {
+            ch = list[id] || list[ctx.name2] || null;
+        }
+        if (!ch) ch = ctx.character || null;
+    } catch (e) {
+        console.warn('[织忆] 取角色卡失败', e);
+    }
+
+    try {
         if (ch) {
             const bits = [];
             if (ch.name) bits.push(`角色名：${ch.name}`);
@@ -957,7 +1033,14 @@ function backgroundBlock() {
         }
     } catch { /* 忽略 */ }
 
-    if (!parts.length) return '';
+    if (!parts.length) {
+        const fallback = [ctx.name2, ctx.name1].filter(Boolean);
+        if (!fallback.length) return '';
+        const lines = [];
+        if (ctx.name2) lines.push(`角色名：${ctx.name2}`);
+        if (ctx.name1) lines.push(`我（玩家）：${ctx.name1}`);
+        return `<背景设定>\n${lines.join('\n')}\n（客户端没有提供角色卡正文）\n</背景设定>`;
+    }
     return `<背景设定>\n${parts.join('\n\n')}\n</背景设定>`;
 }
 
@@ -1063,6 +1146,25 @@ function buildRoundPrompt(transcript, tpl, arcItems, extra = {}) {
     return parts.filter(x => x !== null).join('\n');
 }
 
+/** 去掉标点、空白、符号后还剩多少字 —— 用来判断这一轮是不是空的 */
+function meaningfulLength(str) {
+    try {
+        return String(str || '').replace(/[\s\p{P}\p{S}]/gu, '').length;
+    } catch {
+        return String(str || '').replace(/[\s\p{P}]/g, '').length;
+    }
+}
+
+/** 总结里如果只是在描述「没人说话」，那不值得占一条时间线 */
+function looksLikeSilence(t) {
+    const s = String(t || '');
+    // 只挡那种一句话讲完「谁都没说话」的，长一点的叙述里有动作就不算
+    if (!s || s.length > 45) return false;
+    const silence = /省略号|沉默|无言|一言不发/.test(s);
+    const noProgress = /没有|未|只|仅|无/.test(s);
+    return silence && noProgress;
+}
+
 function pickTag(text, tag) {
     const m = String(text || '').match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'));
     return m ? m[1].trim() : '';
@@ -1138,8 +1240,20 @@ async function runRound() {
         .map(r => `${speakerOf(r.msg)}：${String(r.msg.mes).trim().slice(0, 700)}`)
         .join('\n');
 
+    // 整轮都是省略号、标点、空行，就没有总结的意义
+    const flat = msgs.map(r => String(r.msg.mes).trim()).join('');
+    if (meaningfulLength(flat) < 6) {
+        node.beatMark = to;
+        persist();
+        console.log('[织忆] 这一轮没有实质内容，跳过：', flat.slice(0, 40) || '（空）');
+        lastRoundInfo = { at: Date.now(), template: tpl ? tpl.id : '—', parsed: 0, saved: 0, dropped: 0, beat: '', fieldHits: [], transcript: flat.slice(0, 400), background: 0, skipped: true };
+        lastRawOut = '';
+        return { beat: null, arc: null, people: 0, skipped: true };
+    }
+
+    const background = backgroundBlock();
     const prompt = buildRoundPrompt(transcript, tpl, arcItems, {
-        background: backgroundBlock(),
+        background,
         known: knownPeopleLine(tpl),
     });
 
@@ -1187,6 +1301,10 @@ async function runRound() {
     if (!isUsableSummary(text)) {
         const joined = msgs.map(r => String(r.msg.mes).trim()).join(' ');
         text = cleanSummary(joined.slice(0, 60) + '…', 200);
+    }
+    if (looksLikeSilence(text)) {
+        console.log('[织忆] 这一轮只有沉默，不记入时间线：', text);
+        text = '';
     }
     if (isUsableSummary(text)) {
         beat = mkBeat(oneSentence(text, 80), from, to);
@@ -1237,6 +1355,7 @@ async function runRound() {
         beat: parsed.beat || '',
         fieldHits: lastFieldHits,
         transcript: transcript.slice(0, 400),
+        background: background.length,
     };
     console.log('[织忆] 本轮 · 解析', parsed.people.length, '人 · 落库', people, '人 · 丢弃', dropped,
         '· 字段', lastFieldHits.join(',') || '无');
@@ -2806,6 +2925,8 @@ function openDebug() {
         ${row('落库', info.saved)}
         ${row('低于门槛丢弃', info.dropped)}
         ${row('字段命中', (info.fieldHits || []).join('，') || '（无）')}
+        ${row('背景设定', info.background ? info.background + ' 字' : '（空，没读到角色卡）')}
+        ${row('存储通道', saveChannel === 'host' ? '宿主设置' : '仅本地备份')}
         ${row('beat', info.beat || '（空）')}
       </div>
       <div class="mw-dbg-title">本轮对话（节选）</div>
@@ -3445,6 +3566,7 @@ async function init() {
                 cursor: node.cursor,
                 pending: pendingRounds(),
                 templates: getTemplates().map(t => `${t.name}${t.singleton ? '[快照]' : ''}(${t.fields.length})`),
+                storage: saveChannel,
             };
         },
     };
