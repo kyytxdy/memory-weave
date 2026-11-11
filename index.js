@@ -361,13 +361,43 @@ function cleanSummary(raw, maxLen = 400) {
 
     t = t.replace(/^```[a-zA-Z]*\s*/i, '').replace(/```\s*$/, '');
     t = t.replace(/^["'“”「『]+/, '').replace(/["'“”」』]+$/, '');
-    t = t.replace(/^(好的|好的，|以下是|这是|总结[：:]|摘要[：:]|概要[：:]|本轮[：:])\s*/g, '');
+    // 模型爱加的元叙述，反复剥几轮
+    for (let n = 0; n < 3; n++) {
+        const before = t;
+        t = t.replace(/^(好的|好|以下是|下面是|这是|总结|摘要|概要|本轮|回答)[^。！？\n]{0,18}[：:]\s*/, '');
+        t = t.replace(/^[^。！？\n]{0,14}(的)?(最终|最终版|正确)?(输出|结果|回复|答案)[：:]\s*/, '');
+        t = t.replace(/^[，。、；：,.;:\s「」“”"'—－]+/, '');
+        if (t === before) break;
+    }
     t = t.replace(/^#{1,6}\s*/gm, '');
     t = t.replace(/^\s*[-*•]\s*/gm, '');
     t = t.replace(/\s+/g, ' ').trim();
 
     if (t.length > maxLen) t = t.slice(0, maxLen).replace(/[，、；,;。]$/, '') + '…';
     return t;
+}
+
+/** 取第一句，超长就砍掉 —— 总结该是一句话，不是一段 */
+function oneSentence(t, max = 80) {
+    if (!t) return '';
+    if (t.length <= max) return t;
+    const m = t.match(/^[^。！？!?]{6,}[。！？!?]/);
+    if (m && m[0].length <= max * 1.6) return m[0];
+    return t.slice(0, max).replace(/[，、；,;]$/, '') + '…';
+}
+
+/** 总结里若大段文字能在原文里找到，说明它在复述而不是压缩 */
+function tooSimilar(summary, source) {
+    const s = String(summary || '').replace(/\s/g, '');
+    if (s.length < 12) return false;
+    const src = String(source || '').replace(/\s/g, '');
+    const mid = Math.floor(s.length / 2);
+    const probes = [s.slice(2, 10), s.slice(mid, mid + 8), s.slice(-10)];
+    let hit = 0;
+    for (const p of probes) {
+        if (p.length >= 6 && src.includes(p)) hit++;
+    }
+    return hit >= 2;
 }
 
 /** 明显不是总结的回复，直接判废，不写入 */
@@ -481,14 +511,21 @@ function speakerOf(m) {
 
 function buildBeatPrompt(transcript) {
     return [
-        '把下面这一段角色扮演对话压缩成一句话。',
+        '【这是一次文本处理任务，不是角色扮演。你不要扮演任何角色，不要续写剧情。】',
+        '',
+        '把下面这一段角色扮演对话，压缩成一句话。',
+        '',
+        '示例（只示意格式，不要照抄内容）：',
+        '林染赖床不肯起，露西艾拉掀了他的被子，两人拌了几句嘴。',
         '',
         '要求：',
         '- 50 字左右，最多不超过 70 字。',
         '- 写清谁做了什么、结果如何，保留出现的人名和具体动作。',
         '- 用名字指代，不要用「他」「她」「对方」，否则过几轮就分不清是谁。',
         '- 不复述台词，不评价，不写「接着」「这一轮」「然后」这类过场词。',
-        '- 直接输出正文。不要引号、不要标题、不要分点、不要任何解释。',
+        '- 直接输出那一句话。不要引号、不要标题、不要分点。',
+        '- 绝对不要复述原文，不要输出「这是……」「以下是……」这类说明。',
+        '- 第一个字就是总结本身。',
         '',
         '对话：',
         transcript,
@@ -554,6 +591,12 @@ async function generateBeat(fromRound, toRound) {
     let text = '';
     if (S.useAI) {
         text = cleanSummary(await aiCall(buildBeatPrompt(transcript), 200, 'memory-beat'), 200);
+        // 复述原文的话，再问一次
+        if (isUsableSummary(text) && tooSimilar(text, transcript)) {
+            console.log('[织忆] 输出像复述，重试一次');
+            const again = cleanSummary(await aiCall(buildBeatPrompt(transcript), 200, 'memory-beat'), 200);
+            if (isUsableSummary(again) && !tooSimilar(again, transcript)) text = again;
+        }
     }
     if (!isUsableSummary(text)) {
         // 模型不配合时退化成截取，至少不断链
@@ -562,7 +605,7 @@ async function generateBeat(fromRound, toRound) {
     }
     if (!isUsableSummary(text)) return null;
 
-    const beat = mkBeat(text, fromRound, toRound);
+    const beat = mkBeat(oneSentence(text, 80), fromRound, toRound);
     pushCapped('beats', beat);
     return beat;
 }
@@ -733,8 +776,14 @@ function parsePeople(raw, tpl) {
     return out;
 }
 
-async function autoUpdatePeople() {
-    if (!ready || filling || weaving || !S.enabled || !S.autoFillSnapshots) return;
+async function autoUpdatePeople(retry = 3) {
+    if (!ready || !S.enabled || !S.autoFillSnapshots) return;
+
+    // 总结那边正在跑就排队等，不能直接丢弃
+    if (filling || weaving) {
+        if (retry > 0) setTimeout(() => autoUpdatePeople(retry - 1), 6000);
+        return;
+    }
 
     const tpls = entityTemplates();
     if (!tpls.length) return;
@@ -1749,9 +1798,12 @@ function clearMemories() {
     node.arcs = [];
     node.memos = [];
     node.memories = [];
-    node.beatMark = 0;
-    node.arcMark = 0;
+    // 清空即从当前位置重新开始，不把历史重新算成欠账
+    const now = assistantTotal();
+    node.beatMark = now;
+    node.arcMark = now;
     node.cursor = 0;
+    node.hiddenUpTo = -1;
 
     btn.dataset.armed = '0';
     btn.textContent = '清空本角色的全部记忆';
@@ -2732,7 +2784,7 @@ function scheduleAuto() {
 /** 快照更新排在编织之后，避免两条链路同时打模型 */
 function scheduleFill() {
     clearTimeout(fillTimer);
-    fillTimer = setTimeout(() => autoUpdatePeople(), 3000);
+    fillTimer = setTimeout(() => autoUpdatePeople(), 6000);
 }
 
 function onChatChanged() {
