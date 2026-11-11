@@ -209,6 +209,9 @@
       } else if (view === 'cost') {
         document.querySelector('[data-tab="settings"]')?.click();
         setTimeout(() => { const b = document.querySelector('.mw-body'); if (b) b.scrollTop = b.scrollHeight; }, 300);
+      } else if (view === 'debug') {
+        document.querySelector('[data-tab="settings"]')?.click();
+        setTimeout(() => document.querySelector('[data-mw="debug"]')?.click(), 200);
       } else if (view === 'fields') {
         document.querySelector('[data-tab="templates"]')?.click();
         setTimeout(() => document.querySelector('[data-person-fields]')?.click(), 200);

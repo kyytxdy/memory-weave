@@ -1942,3 +1942,65 @@ body.mw-locked {
         transition-duration: 0.01ms !important;
     }
 }
+
+/* =========================================================
+ * 诊断面板
+ * ========================================================= */
+
+.mw-dbg {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    border-radius: 12px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.06);
+    margin-bottom: 14px;
+}
+
+.mw-dbg-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 9px 12px;
+    background: rgba(12, 15, 26, 0.55);
+}
+
+.mw-dbg-row b {
+    flex: 0 0 88px;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--mw-faint);
+}
+
+.mw-dbg-row span {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--mw-text);
+    word-break: break-word;
+}
+
+.mw-dbg-title {
+    margin: 14px 0 6px;
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--mw-faint);
+}
+
+.mw-dbg-raw {
+    margin: 0 0 12px;
+    padding: 11px 12px;
+    max-height: 240px;
+    overflow: auto;
+    border-radius: 11px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.65;
+    color: rgba(238, 241, 248, 0.82);
+    background: rgba(0, 0, 0, 0.34);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    white-space: pre-wrap;
+    word-break: break-word;
+}

@@ -143,8 +143,37 @@ function loadSettings() {
     return s;
 }
 
+/**
+ * 找一个可用的保存入口。
+ * 原来只调 ctx.saveSettingsDebounced?.()，那个方法在某些客户端里不存在，
+ * 可选链把失败吞掉，结果记忆只活在内存里 —— 重启就全没了，界面还看不出来。
+ */
+function saveHook() {
+    if (typeof ctx?.saveSettingsDebounced === 'function') return () => ctx.saveSettingsDebounced();
+    if (typeof ctx?.saveSettings === 'function') return () => ctx.saveSettings();
+    const live = globalThis.SillyTavern?.getContext?.();
+    if (typeof live?.saveSettingsDebounced === 'function') return () => live.saveSettingsDebounced();
+    if (typeof live?.saveSettings === 'function') return () => live.saveSettings();
+    if (typeof globalThis.saveSettingsDebounced === 'function') return () => globalThis.saveSettingsDebounced();
+    return null;
+}
+
+let saveWarned = false;
 function persist() {
-    try { ctx.saveSettingsDebounced?.(); } catch { /* 忽略 */ }
+    const hook = saveHook();
+    if (!hook) {
+        if (!saveWarned) {
+            saveWarned = true;
+            console.error('[织忆] 找不到保存设置的方法，记忆只会存在内存里，重启会丢。可用的 ctx 键：',
+                Object.keys(ctx || {}).filter(k => /save|setting/i.test(k)));
+        }
+        return;
+    }
+    try {
+        hook();
+    } catch (e) {
+        console.warn('[织忆] 保存设置失败', e);
+    }
 }
 
 /* =========================================================
@@ -747,35 +776,140 @@ function buildPersonPrompt(transcript, tpl) {
     ].filter(x => x !== '').join('\n');
 }
 
+function normalizeLabel(s) {
+    return String(s || '')
+        .replace(/\*\*/g, '')
+        .replace(/[（(][^）)]*[）)]/g, '')
+        .replace(/[\s:：、.。]/g, '')
+        .trim()
+        .toLowerCase();
+}
+
+/** 常见同义写法，避免模型换个词就整列丢失 */
+const LABEL_ALIAS = {
+    '名字': 'name', '称呼': 'name', '姓名': 'name',
+    '身份': 'role', '职业': 'role', '身份职业': 'role',
+    '年龄': 'age',
+    '关系': 'relation', '与我的关系': 'relation',
+    '态度': 'attitude', '对我的态度': 'attitude',
+    '时间': 'time', '当前时间': 'time',
+    '最近动态': 'recent', '动态': 'recent', '最近': 'recent', '最近互动': 'recent',
+    '所在地': 'place', '位置': 'place', '地点': 'place',
+    '生日': 'birthday',
+    '外貌': 'look', '外貌特征': 'look',
+    '备注': 'note', '其它': 'note', '其他': 'note',
+};
+
+function buildLabelMap(tpl, keyId) {
+    const map = new Map();
+    for (const f of tpl.fields) {
+        map.set(normalizeLabel(f.label), f.id);
+        if (f.id !== keyId) map.set(normalizeLabel(f.id), f.id);
+    }
+    const ids = new Set(tpl.fields.map(f => f.id));
+    for (const [alias, id] of Object.entries(LABEL_ALIAS)) {
+        if (ids.has(id) && !map.has(normalizeLabel(alias))) map.set(normalizeLabel(alias), id);
+    }
+    return map;
+}
+
+function cleanName(s) {
+    return String(s || '').replace(/[「」“”"'*_`]/g, '').trim();
+}
+
+/** 名字行：【艾拉】重要度:5 / [艾拉]5 / 艾拉（重要度5）/ 艾拉: 重要度 4 / 艾拉： */
+function parsePersonHead(line) {
+    const t = String(line || '').trim();
+    if (!t) return null;
+
+    let m = t.match(/^[>*_#\-\s]*[【\[（(]\s*([^】\]）)\n]{1,20})\s*[】\]）)]\s*(?:重要度|重要性)?\s*[:：]?\s*([1-5])?/);
+    if (m) {
+        const name = cleanName(m[1]);
+        if (name) return { name, imp: Number(m[2]) || 3 };
+    }
+
+    m = t.match(/^[>*_#\-\s]*(.{1,16}?)\s*[（(]\s*(?:重要度|重要性)\s*[:：]?\s*([1-5])\s*[）)]?/);
+    if (m) {
+        const name = cleanName(m[1]);
+        if (name) return { name, imp: Number(m[2]) || 3 };
+    }
+
+    m = t.match(/^[>*_#\-\s]*([^\s：:【】\[\]（）()*]{1,16})\s*[：:]\s*(?:重要度|重要性)\s*[:：]?\s*([1-5])/);
+    if (m) return { name: cleanName(m[1]), imp: Number(m[2]) || 3 };
+
+    m = t.match(/^[>*_#\-\s]*([^\s：:【】\[\]（）()*]{1,16})\*{0,2}\s*(?:重要度|重要性)\s*[:：]?\s*([1-5])/);
+    if (m) return { name: cleanName(m[1]), imp: Number(m[2]) || 3 };
+
+    m = t.match(/^[>*_#\-\s]*([^\s：:【】\[\]（）()*]{1,16})\s*[：:]\s*$/);
+    if (m) return { name: cleanName(m[1]), imp: 3 };
+
+    return null;
+}
+
+/** 把回复切成人物的块。先按【】切，切不开再按空行切 */
+function splitPersonBlocks(text) {
+    const byBracket = String(text || '').split(/(?=^[>*_#\-\s]*[【\[])/m).filter(x => x.trim());
+    if (byBracket.length > 1) return byBracket;
+
+    const byBlank = String(text || '').split(/\n\s*\n/).filter(b => /重要度|重要性/.test(b) && /[：:]/.test(b));
+    return byBlank.length ? byBlank : byBracket;
+}
+
+let lastFieldHits = [];
+let lastRawOut = '';
+let lastRoundInfo = null;
+
 function parsePeople(raw, tpl) {
-    const labelToId = new Map(tpl.fields.map(f => [f.label, f.id]));
     const keyId = tpl.keyField || 'name';
+    const byLabel = buildLabelMap(tpl, keyId);
     const out = [];
+    const hits = new Set();
 
-    for (const block of String(raw).split(/(?=【)/)) {
-        const head = block.match(/^[【\[（(]\s*([^】\]）)\n]{1,20})\s*[】\]）)]\s*(?:重要度\s*[:：]\s*([1-5]))?/);
-        if (!head) continue;
+    for (const block of splitPersonBlocks(raw)) {
+        const lines = String(block).split(/\r?\n/);
+        let head = null;
+        let start = 0;
 
-        const name = head[1].replace(/[「」“”"'']/g, '').trim();
-        if (!name) continue;
+        for (let i = 0; i < Math.min(lines.length, 3); i++) {
+            head = parsePersonHead(lines[i]);
+            if (head) { start = i + 1; break; }
 
-        const values = { [keyId]: name };
-        const allowed = new Set(visibleFields(tpl, isSelfName(name)).map(f => f.id));
+            // 只有裸名字，重要度写在下一行
+            const bare = String(lines[i] || '').trim().match(/^[*_#\-\s]*([^\s：:【】\[\]（）()*<>/]{1,12})$/);
+            if (bare && !/重要度|重要性/.test(bare[1])) {
+                const next = String(lines[i + 1] || '');
+                const mi = next.match(/(?:重要度|重要性)\s*[:：]?\s*([1-5])/);
+                head = { name: cleanName(bare[1]), imp: mi ? Number(mi[1]) : 3 };
+                start = i + 1 + (mi ? 1 : 0);
+                break;
+            }
+        }
+        if (!head || !head.name) continue;
+        // 标签本身、纯符号不该当人名
+        if (/[<>\/]/.test(head.name) || /^[\-—_.。·]+$/.test(head.name)) continue;
 
-        for (const line of block.split(/\r?\n/).slice(1)) {
-            const m = line.trim().match(/^[-*•\s]*([^：:]{1,12})\s*[：:]\s*(.+)$/);
+        const values = { [keyId]: head.name };
+        const allowed = new Set(visibleFields(tpl, isSelfName(head.name)).map(f => f.id));
+
+        for (const line of lines.slice(start)) {
+            let m = line.match(/^[\s>*_#\-]*\*\*([^*]{1,20})\*\*\s*[：:]\s*(.+)$/);
+            if (!m) m = line.match(/^[\s>*_#\-]*([^：:]{1,20})\s*[：:]\s*(.+)$/);
             if (!m) continue;
 
-            const fid = labelToId.get(m[1].trim());
+            const fid = byLabel.get(normalizeLabel(m[1]));
             if (!fid || fid === keyId || !allowed.has(fid)) continue;
 
-            const val = m[2].trim().slice(0, 200);
-            if (!val || /^(无|未知|未提及|不明|不详|n\/a|none|-|—)$/i.test(val)) continue;
+            const val = m[2].trim().replace(/^\*\*|\*\*$/g, '').slice(0, 200);
+            if (!val || /^(无|未知|未提及|不明|不详|n\/a|none|null|-|—)$/i.test(val)) continue;
+
             values[fid] = val;
+            hits.add(fid);
         }
 
-        out.push({ name, importance: Number(head[2]) || 3, values });
+        out.push({ name: head.name, importance: head.imp, values });
     }
+
+    lastFieldHits = [...hits];
     return out;
 }
 
@@ -912,10 +1046,19 @@ async function runRound() {
     const msgs = seqHistory().filter(x => x.seq >= from && x.seq <= to);
     if (!msgs.length) return { beat: null, arc: null, people: 0 };
 
-    // 关掉「自动建档人物」就不向模型要人物段，省一次解析
-    const tpl = S.autoFillSnapshots === false
-        ? null
-        : (entityTemplates()[0] || getTemplates().find(t => t.entity) || PERSON_TEMPLATE);
+    // 用「已经存了最多人」的那张模板，避免新建的人物跑到另一个模板 id 下面
+    const pools = node.entities || {};
+    let tpl = null;
+    if (S.autoFillSnapshots !== false) {
+        const entityTpls = getTemplates().filter(t => t.entity);
+        let best = null;
+        let bestN = -1;
+        for (const t of entityTpls) {
+            const n = Object.keys(pools[t.id] || {}).length;
+            if (n > bestN) { bestN = n; best = t; }
+        }
+        tpl = best || PERSON_TEMPLATE;
+    }
 
     const needArc = !!S.autoArc && (total - node.arcMark >= arcSpan);
     const arcFrom = node.arcMark + 1;
@@ -928,12 +1071,12 @@ async function runRound() {
 
     const prompt = buildRoundPrompt(transcript, tpl, arcItems);
 
+    let rawOut = '';
     let parsed = { beat: '', people: [], arc: '' };
     if (S.useAI) {
-        const raw = await aiCall(prompt, ROUND_MAX_TOKENS, 'memory-round');
-        parsed = parseRound(raw, tpl);
+        rawOut = await aiCall(prompt, ROUND_MAX_TOKENS, 'memory-round');
+        parsed = parseRound(rawOut, tpl);
 
-        // 协议没走通，或 beat 是照抄原文，就把坏输出回灌再要一次
         const empty = !parsed.beat && !parsed.people.length;
         const copied = !!parsed.beat && tooSimilar(parsed.beat, transcript);
 
@@ -947,7 +1090,7 @@ async function runRound() {
                 prompt,
                 '',
                 '======== 你的上一次回答 ========',
-                String(raw || '（空）').slice(0, 1500),
+                String(rawOut || '（空）').slice(0, 1500),
                 '======== 问题 ========',
                 why,
                 '',
@@ -955,7 +1098,8 @@ async function runRound() {
                 '<beat> 必须是你自己写的一句话，不能出现原文里的句子。',
             ].join('\n');
 
-            const again = parseRound(await aiCall(feedback, ROUND_MAX_TOKENS, 'memory-round'), tpl);
+            rawOut = await aiCall(feedback, ROUND_MAX_TOKENS, 'memory-round');
+            const again = parseRound(rawOut, tpl);
             const better = !!again.beat && !tooSimilar(again.beat, transcript);
             if (better) {
                 parsed = { ...again, people: again.people.length ? again.people : parsed.people };
@@ -977,10 +1121,15 @@ async function runRound() {
         pushCapped('beats', beat);
     }
 
+    const floor = Number(S.personMinImportance || 3);
     let people = 0;
+    let dropped = 0;
+
     for (const p of (tpl ? parsed.people : [])) {
         if (!p || !p.name) continue;
-        if (p.importance < Number(S.personMinImportance || 3)) continue;
+        // 门槛只挡新人：已经在册的角色被提及时不该因为分低就不更新
+        const existing = getEntity(tpl.id, p.name);
+        if (!existing && p.importance < floor) { dropped++; continue; }
         try {
             upsertEntity(tpl.id, p.name, p.values, p.importance, to);
             people++;
@@ -1003,6 +1152,23 @@ async function runRound() {
 
     const marked = pruneEntities();
     if (marked) console.log(`[织忆] ${marked} 个人物超过 ${S.personTTL} 轮未出现，标为离场`);
+
+    // 留一份现场，出问题时能直接看模型到底回了什么
+    lastRawOut = String(rawOut || '');
+    lastRoundInfo = {
+        at: Date.now(),
+        template: tpl ? tpl.id : '（未启用）',
+        parsed: parsed.people.length,
+        saved: people,
+        dropped,
+        filtered: dropped,
+        beat: parsed.beat || '',
+        fieldHits: lastFieldHits,
+        transcript: transcript.slice(0, 400),
+    };
+    console.log('[织忆] 本轮 · 解析', parsed.people.length, '人 · 落库', people, '人 · 丢弃', dropped,
+        '· 字段', lastFieldHits.join(',') || '无');
+    console.log('[织忆] 原始输出：\n' + lastRawOut);
 
     return { beat, arc, people };
 }
@@ -1524,6 +1690,14 @@ function buildUI() {
               </div>
             </div>
 
+            <div class="mw-group">
+              <div class="mw-group-title">排错</div>
+              <div class="mw-row">
+                <div class="mw-row-main"><b>最近一次调用</b><small>看模型到底回了什么、解析到几个人</small></div>
+                <button class="mw-chipbtn" data-mw="debug">查看</button>
+              </div>
+            </div>
+
             <div class="mw-group mw-danger">
               <button class="mw-btn mw-btn-danger" data-mw="clear">清空本角色的全部记忆</button>
             </div>
@@ -1569,6 +1743,7 @@ function bindPanelEvents(app) {
         if (ev.target.closest('[data-mw="backfill"]')) { backfillAll(); return; }
         if (ev.target.closest('[data-mw="clear"]')) { clearMemories(); return; }
         if (ev.target.closest('[data-mw="unhide"]')) { unhideAll(); return; }
+        if (ev.target.closest('[data-mw="debug"]')) { openDebug(); return; }
 
         if (ev.target.closest('[data-mw="new-record"]')) { openForm(); return; }
         if (ev.target.closest('[data-mw="new-tpl"]')) { createTemplate(); return; }
@@ -2085,7 +2260,7 @@ function ensureDrawer() {
         </header>
         <div class="mw-tplbar" data-dr="tplbar"></div>
         <div class="mw-form-body" data-dr="body"></div>
-        <footer class="mw-form-foot">
+        <footer class="mw-form-foot" data-dr="foot">
           <button class="mw-btn" data-dr="cancel">取消</button>
           <button class="mw-btn mw-btn-primary" data-dr="save">保存</button>
         </footer>
@@ -2357,6 +2532,10 @@ function renderFormShell(rec, tplId, mode = 'record') {
 
     el('[data-dr="title"]', d).innerHTML = `${headTitle}<small>${esc(tpl.name)}</small>`;
 
+    // 从诊断面板回来时把底部按钮还原
+    const foot = el('[data-dr="foot"]', d);
+    if (foot) foot.style.display = '';
+
     el('[data-dr="tplbar"]', d).innerHTML = (rec || isSnapshot || isEntity)
         ? `${isSnapshot ? `<span class="mw-snapbar">最后更新 ${rec ? minuteLabel(rec.updatedTs) : '—'}</span>` : ''}
            ${isEntity && rec ? `<span class="mw-snapbar">上次出现 第 ${rec.lastRound || '?'} 轮</span>` : ''}
@@ -2382,7 +2561,7 @@ function renderFormShell(rec, tplId, mode = 'record') {
     let fieldSet = tpl.fields;
     if (isEntity && rec) {
         const recName = rec.values?.[tpl.keyField || 'name'] || rec.key;
-        const base = rec.fields ? { ...tpl, fields: rec.fields } : tpl;
+        const base = { ...tpl, fields: mergeFields(tpl.fields, rec.fields) };
         fieldSet = visibleFields(base, isSelfName(recName));
     }
     const mainFields = fieldSet.filter(f => f.group === 'main');
@@ -2530,6 +2709,43 @@ function saveRecord() {
 /* ---------- 模板编辑器 ---------- */
 
 /** 单独改某个人物的字段：复制一份到他自己身上，不动模板 */
+/** 诊断面板：把最近一次模型输出和解析结果摆出来 */
+function openDebug() {
+    if (!ui.app) buildUI();
+    if (!ui.app.classList.contains('mw-open')) openPanel();
+    ensureDrawer();
+
+    const d = el('#mw-drawer');
+    el('[data-dr="title"]', d).innerHTML = '最近一次调用<small>DEBUG</small>';
+    el('[data-dr="tplbar"]', d).innerHTML = '';
+    // 只读面板，不需要保存/取消
+    const foot = el('[data-dr="foot"]', d);
+    if (foot) foot.style.display = 'none';
+
+    const info = lastRoundInfo;
+    const row = (k, v) => `<div class="mw-dbg-row"><b>${k}</b><span>${esc(String(v))}</span></div>`;
+
+    const body = el('[data-dr="body"]', d);
+    body.innerHTML = info ? `
+      <div class="mw-dbg">
+        ${row('时间', minuteLabel(info.at))}
+        ${row('用的模板', info.template)}
+        ${row('解析出人物', info.parsed)}
+        ${row('落库', info.saved)}
+        ${row('低于门槛丢弃', info.dropped)}
+        ${row('字段命中', (info.fieldHits || []).join('，') || '（无）')}
+        ${row('beat', info.beat || '（空）')}
+      </div>
+      <div class="mw-dbg-title">本轮对话（节选）</div>
+      <pre class="mw-dbg-raw">${esc(info.transcript || '')}</pre>
+      <div class="mw-dbg-title">模型原始输出</div>
+      <pre class="mw-dbg-raw">${esc(lastRawOut || '（空）')}</pre>
+    ` : `<div class="mw-empty"><p>还没跑过</p><span>先聊一轮，再回来看</span></div>`;
+
+    body.scrollTop = 0;
+    openDrawer();
+}
+
 function openEntityFieldEditor(tplId, key) {
     if (!ui.app) buildUI();
     if (!ui.app.classList.contains('mw-open')) openPanel();
@@ -2698,6 +2914,14 @@ function isSelfName(name) {
     return !!me && String(name || '').trim() === me;
 }
 
+/** 当前模板 + 卡片自带字段的并集，按 id 去重，模板优先 */
+function mergeFields(base, extra) {
+    const map = new Map();
+    for (const f of base || []) map.set(f.id, { ...f });
+    for (const f of extra || []) if (!map.has(f.id)) map.set(f.id, { ...f });
+    return [...map.values()];
+}
+
 /** 按主角 / 非主角筛出该显示的字段 */
 function visibleFields(tpl, isSelf) {
     return tpl.fields.filter(f => {
@@ -2710,7 +2934,7 @@ function personRowHTML(t, p) {
     const keyId = t.keyField || 'name';
     const name = p.values?.[keyId] || p.key;
     const isSelf = isSelfName(name);
-    const tplDef = p.fields ? { ...t, fields: p.fields } : t;
+    const tplDef = { ...t, fields: mergeFields(t.fields, p.fields) };
     const fields = visibleFields(tplDef, isSelf);
     const brief = [p.values?.role, p.values?.relation].filter(Boolean).join(' · ');
 
@@ -3125,6 +3349,8 @@ async function init() {
         weave: manualWeave,
         backfill: backfillAll,
         fill: () => { store().fillSig = ''; return autoUpdatePeople(); },
+        debug: openDebug,
+        get last() { return { raw: lastRawOut, info: lastRoundInfo }; },
         template: () => openTemplateEditor(PERSON_TEMPLATE.id, true),
         get settings() { return S; },
         get store() { return store(); },
