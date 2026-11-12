@@ -989,23 +989,100 @@ function parsePeople(raw, tpl) {
 
 const ROUND_MAX_TOKENS = 1400;
 
-/** 角色卡 + 玩家设定。年龄、生日、常驻地通常只在这里出现 */
-function backgroundBlock() {
+/* =========================================================
+ * 世界书
+ *
+ * 年龄、生日、身世这类设定经常不在角色卡正文里，而是写在
+ * 世界书条目里（角色卡内嵌的 character_book，或全局/聊天绑定的
+ * 独立世界书）。之前只读角色卡，模型看不到这些，档案自然空着。
+ *
+ * 卡内世界书是纯数据，直接读；独立世界书要借酒馆的
+ * world-info 模块异步加载，加载失败也不影响主流程。
+ * 每次总结都拉一遍太浪费，按「角色 + 聊天」缓存一分钟。
+ * ========================================================= */
+const LORE_MAX_CHARS = 3500;
+let loreCache = { key: '', at: 0, text: '' };
+
+function loreEntryLines(entries) {
+    if (!Array.isArray(entries)) return [];
+    return entries
+        .filter(e => e && e.content && e.enabled !== false && e.disable !== true)
+        .map(e => {
+            const title = e.comment || (Array.isArray(e.key) ? e.key.join('/') : (e.key || ''));
+            const body = String(e.content).trim();
+            return title ? `· ${title}：${body}` : `· ${body}`;
+        })
+        .filter(Boolean);
+}
+
+async function collectLore() {
+    let key = '';
+    try { key = `${ctx.characterId ?? ctx.this_chid ?? ''}|${ctx.chatId ?? ''}`; } catch { /* 忽略 */ }
+    if (loreCache.key === key && loreCache.text && Date.now() - loreCache.at < 60000) {
+        return loreCache.text;
+    }
+
     const parts = [];
 
-    let ch = null;
+    // 1) 角色卡内嵌世界书
+    try {
+        const ch = findCharacter();
+        const book = ch?.data?.character_book || ch?.character_book;
+        const lines = loreEntryLines(book?.entries);
+        if (lines.length) parts.push(lines.join('\n'));
+    } catch { /* 忽略 */ }
+
+    // 2) 已加载的独立世界书：全局勾选 + 聊天绑定 + 角色扩展
+    try {
+        const names = new Set();
+        const add = v => { if (Array.isArray(v)) v.forEach(n => n && names.add(String(n))); };
+        add(ctx.power_user?.world_info);
+        add(ctx.chatMetadata?.world_info);
+        add(ctx.worldInfoSettings?.worldInfo);
+        try {
+            const ch = findCharacter();
+            const ext = ch?.data?.extensions;
+            if (Array.isArray(ext?.world)) ext.world.forEach(n => n && names.add(String(n)));
+        } catch { /* 忽略 */ }
+
+        if (names.size) {
+            const wi = await import('/scripts/world-info.js');
+            for (const name of names) {
+                try {
+                    const data = await wi.loadWorldInfo(name);
+                    const lines = loreEntryLines(Object.values(data?.entries || {}));
+                    if (lines.length) parts.push(lines.join('\n'));
+                } catch { /* 单本读不到就跳过 */ }
+            }
+        }
+    } catch { /* world-info 模块不可用就算了 */ }
+
+    let text = parts.join('\n\n');
+    if (text.length > LORE_MAX_CHARS) text = text.slice(0, LORE_MAX_CHARS) + '…';
+    loreCache = { key, at: Date.now(), text };
+    return text;
+}
+
+function findCharacter() {
     try {
         const list = ctx.characters;
         const id = ctx.characterId ?? ctx.this_chid;
         if (Array.isArray(list)) {
-            ch = list[id] || list.find(c => c && c.name && c.name === ctx.name2) || null;
-        } else if (list && typeof list === 'object') {
-            ch = list[id] || list[ctx.name2] || null;
+            return list[id] || list.find(c => c && c.name && c.name === ctx.name2) || null;
         }
-        if (!ch) ch = ctx.character || null;
+        if (list && typeof list === 'object') {
+            return list[id] || list[ctx.name2] || null;
+        }
     } catch (e) {
         console.warn('[织忆] 取角色卡失败', e);
     }
+    try { return ctx.character || null; } catch { return null; }
+}
+
+/** 角色卡 + 玩家设定。年龄、生日、常驻地通常只在这里出现 */
+function backgroundBlock(lore = '') {
+    const parts = [];
+    const ch = findCharacter();
 
     try {
         if (ch) {
@@ -1032,6 +1109,10 @@ function backgroundBlock() {
             parts.push(`我（玩家）：${me}${persona ? '。' + String(persona).slice(0, 400) : ''}`);
         }
     } catch { /* 忽略 */ }
+
+    if (lore) {
+        parts.push(String(lore));
+    }
 
     if (!parts.length) {
         const fallback = [ctx.name2, ctx.name1].filter(Boolean);
@@ -1115,7 +1196,7 @@ function buildRoundPrompt(transcript, tpl, arcItems, extra = {}) {
         wantPeople ? '' : null,
         wantPeople ? '—— 资料来源（重要）' : null,
         wantPeople ? '有两个来源，都要看：' : null,
-        wantPeople ? '1. <背景设定>：角色卡、我的设定。年龄、生日、所在地、外貌通常只写在这里。' : null,
+        wantPeople ? '1. <背景设定>：角色卡、世界书条目、我的设定。年龄、生日、身世、外貌这类基础信息通常只写在这里。' : null,
         wantPeople ? '2. <本轮对话>：这一轮实际发生的事。' : null,
         wantPeople ? '背景设定里明确写了的，直接取用 —— 不要因为本轮对话没提到就留空。' : null,
         wantPeople ? '两边都没有依据的字段，才整行省略。' : null,
@@ -1251,7 +1332,8 @@ async function runRound() {
         return { beat: null, arc: null, people: 0, skipped: true };
     }
 
-    const background = backgroundBlock();
+    const lore = S.useAI ? await collectLore() : '';
+    const background = backgroundBlock(lore);
     const prompt = buildRoundPrompt(transcript, tpl, arcItems, {
         background,
         known: knownPeopleLine(tpl),
@@ -1356,6 +1438,7 @@ async function runRound() {
         fieldHits: lastFieldHits,
         transcript: transcript.slice(0, 400),
         background: background.length,
+        lore: lore.length,
     };
     console.log('[织忆] 本轮 · 解析', parsed.people.length, '人 · 落库', people, '人 · 丢弃', dropped,
         '· 字段', lastFieldHits.join(',') || '无');
@@ -2926,6 +3009,7 @@ function openDebug() {
         ${row('低于门槛丢弃', info.dropped)}
         ${row('字段命中', (info.fieldHits || []).join('，') || '（无）')}
         ${row('背景设定', info.background ? info.background + ' 字' : '（空，没读到角色卡）')}
+        ${row('世界书', info.lore !== undefined ? (info.lore ? info.lore + ' 字' : '（0 字，没读到条目）') : '旧版未记录')}
         ${row('存储通道', saveChannel === 'host' ? '宿主设置' : '仅本地备份')}
         ${row('beat', info.beat || '（空）')}
       </div>
